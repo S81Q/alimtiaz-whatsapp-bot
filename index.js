@@ -283,7 +283,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
+  res.json({ status: 'healthy', version: 'v2-vacancy-sync' });
 });
 
 const PORT = process.env.PORT || 3000;
