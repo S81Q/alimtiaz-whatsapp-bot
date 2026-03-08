@@ -101,6 +101,45 @@ async function getProperties() {
   return vacantProperties;
 }
 
+async function getVacantProperties() {
+  const sheets = await getGoogleSheets();
+
+  const [propsResponse, vacancyResponse] = await Promise.all([
+    sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Properties!A1:K1000',
+    }),
+    sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Vacancy!A1:D1000',
+    })
+  ]);
+
+  const propRows = propsResponse.data.values || [];
+  const vacancyRows = vacancyResponse.data.values || [];
+  if (propRows.length < 2) return [];
+
+  const vacHeaders = vacancyRows[0] || [];
+  const vacancyMap = {};
+  vacancyRows.slice(1).forEach(row => {
+    const unit = row[vacHeaders.indexOf('Unit')];
+    const status = row[vacHeaders.indexOf('Status')];
+    if (unit) vacancyMap[unit] = status;
+  });
+
+  const propHeaders = propRows[0];
+  return propRows.slice(1)
+    .map(row => {
+      const obj = {};
+      propHeaders.forEach((h, i) => { obj[h] = row[i] || ''; });
+      return obj;
+    })
+    .filter(prop => {
+      const status = vacancyMap[prop.Unit];
+      return !status || status === 'Vacant' || status === 'Available';
+    });
+}
+
 async function logLead({ phone, name, language, question, interestedUnit, status }) {
   const sheets = await getGoogleSheets();
   const timestamp = new Date().toISOString();
@@ -166,8 +205,8 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`[MSG] From: ${phone} | Message: ${incomingMsg}`);
 
-    // Get properties from Google Sheets
-    const properties = await getProperties();
+    // Get only vacant/available properties from Google Sheets
+    const properties = await getVacantProperties();
 
     // Ask Claude
     const claudeResponse = await askClaude(phone, incomingMsg, properties);
