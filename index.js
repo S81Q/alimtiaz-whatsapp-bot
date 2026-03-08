@@ -21,12 +21,10 @@ const logError = (error) => {
 // --- Google Sheets Setup ---
 let sheetsClient;
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
-const VACANCY_SHEET_ID = '1IQzdhv7FcD6XQnJJ61uWUvO_tMoaRquH5GOs7bXwTyQ';
 
 async function getGoogleSheets() {
   if (sheetsClient) return sheetsClient;
 
-  // Try loading from file first, then from env
   let credentials;
   const saPath = path.join(__dirname, 'service-account.json');
   if (fs.existsSync(saPath)) {
@@ -46,61 +44,76 @@ async function getGoogleSheets() {
   return sheetsClient;
 }
 
-async function getVacancyData() {
+// --- Vacancy Sync (replaces Apps Script dependency) ---
+async function syncVacancy() {
+  console.log('[VacancySync] Starting sync...');
   const sheets = await getGoogleSheets();
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: VACANCY_SHEET_ID,
-      range: 'Vacancy!A1:D',
-    });
-    const rows = res.data.values;
-    if (!rows || rows.length < 2) return {};
-    const vacancyMap = {};
-    rows.slice(1).forEach(row => {
-      const unit = (row[0] || '').toString().trim();
-      const status = (row[1] || '').toString().trim();
-      if (unit) vacancyMap[unit] = status;
-    });
-    console.log('[Vacancy] Loaded ' + Object.keys(vacancyMap).length + ' units from Vacancy tab');
-    return vacancyMap;
-  } catch (err) {
-    console.error('[Vacancy] Failed to load vacancy data:', err.message);
-    return {};
-  }
-}
 
-async function getProperties() {
-  const sheets = await getGoogleSheets();
-  const res = await sheets.spreadsheets.values.get({
+  // Read Properties tab
+  const propRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: 'Properties!A1:K',
+    range: 'Properties!A1:K1000',
   });
-  const rows = res.data.values;
-  if (!rows || rows.length < 2) return [];
-  const headers = rows[0];
-  const allProperties = rows.slice(1).map(row => {
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i] || ''; });
-    return obj;
-  });
-  // Load vacancy data and filter to only show VACANT/AVAILABLE units
-  const vacancyMap = await getVacancyData();
-  if (Object.keys(vacancyMap).length === 0) {
-    // If vacancy sheet is empty or unavailable, return all properties
-    console.log('[Vacancy] No vacancy data available, returning all properties');
-    return allProperties;
+  const propRows = propRes.data.values || [];
+  if (propRows.length < 2) {
+    console.log('[VacancySync] No properties found');
+    return;
   }
-  const vacantProperties = allProperties.filter(prop => {
-    const unitKey = (prop['Unit'] || prop['unit'] || prop['Unit Number'] || '').toString().trim();
-    if (!unitKey) return true; // include if no unit key found
-    const status = vacancyMap[unitKey];
-    if (!status) return true; // include if not in vacancy sheet
-    return status.toLowerCase() === 'vacant' || status.toLowerCase() === 'available';
+
+  const headers = propRows[0];
+  const unitIdx = headers.indexOf('Unit');
+  const statusIdx = headers.indexOf('Status');
+
+  const now = new Date().toISOString();
+  const vacancyData = [
+    ['Unit', 'Status', 'Available_From', 'Updated_At'],
+    ...propRows.slice(1).map(row => {
+      const unit = row[unitIdx] || '';
+      const propStatus = (row[statusIdx] || '').trim().toLowerCase();
+      // Map property status to vacancy status
+      const isVacant = !propStatus || propStatus === 'available' || propStatus === 'vacant';
+      return [
+        unit,
+        isVacant ? 'Vacant' : 'Occupied',
+        isVacant ? now : '',
+        now,
+      ];
+    }),
+  ];
+
+  // Ensure Vacancy tab exists
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: 'Vacancy' } } }],
+      },
+    });
+    console.log('[VacancySync] Created Vacancy tab');
+  } catch (e) {
+    // Tab already exists
+  }
+
+  // Clear and write
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: SHEET_ID,
+    range: 'Vacancy!A:D',
   });
-  console.log('[Vacancy] Filtered: ' + vacantProperties.length + ' vacant out of ' + allProperties.length + ' total');
-  return vacantProperties;
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: 'Vacancy!A1:D' + vacancyData.length,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: vacancyData },
+  });
+
+  const vacantCount = vacancyData.slice(1).filter(r => r[1] === 'Vacant').length;
+  const totalCount = vacancyData.length - 1;
+  console.log(`[VacancySync] Done: ${vacantCount} vacant / ${totalCount} total units`);
+  return { vacant: vacantCount, total: totalCount };
 }
 
+// --- Property Retrieval (filtered by vacancy) ---
 async function getVacantProperties() {
   const sheets = await getGoogleSheets();
 
@@ -112,7 +125,7 @@ async function getVacantProperties() {
     sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
       range: 'Vacancy!A1:D1000',
-    })
+    }).catch(() => ({ data: { values: [] } })),
   ]);
 
   const propRows = propsResponse.data.values || [];
@@ -200,7 +213,7 @@ async function askClaude(phone, userMessage, properties) {
 app.post('/webhook', async (req, res) => {
   try {
     const incomingMsg = req.body.Body || '';
-    const from = req.body.From || ''; // e.g. whatsapp:+974...
+    const from = req.body.From || '';
     const phone = from.replace('whatsapp:', '');
 
     console.log(`[MSG] From: ${phone} | Message: ${incomingMsg}`);
@@ -214,7 +227,6 @@ app.post('/webhook', async (req, res) => {
     // Parse Claude's JSON response
     let parsed;
     try {
-      // Try to extract JSON from the response
       const jsonMatch = claudeResponse.match(/\{[\s\S]*\}/);
       parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { reply: claudeResponse };
     } catch {
@@ -254,12 +266,22 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// Manual vacancy sync trigger endpoint
+app.post('/sync-vacancy', async (req, res) => {
+  try {
+    const result = await syncVacancy();
+    res.json({ status: 'ok', ...result });
+  } catch (error) {
+    logError(error);
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
 });
 
-// Health check for Railway
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy' });
 });
@@ -267,4 +289,12 @@ app.get('/health', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
+
+  // Run vacancy sync on startup
+  syncVacancy().catch(err => console.error('[VacancySync] Startup sync failed:', err.message));
+
+  // Run vacancy sync every hour
+  setInterval(() => {
+    syncVacancy().catch(err => console.error('[VacancySync] Scheduled sync failed:', err.message));
+  }, 60 * 60 * 1000);
 });
