@@ -21,6 +21,7 @@ const logError = (error) => {
 // --- Google Sheets Setup ---
 let sheetsClient;
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const VACANCY_SHEET_ID = '1IQzdhv7FcD6XQnJJ61uWUvO_tMoaRquH5GOs7bXwTyQ';
 
 async function getGoogleSheets() {
   if (sheetsClient) return sheetsClient;
@@ -45,22 +46,59 @@ async function getGoogleSheets() {
   return sheetsClient;
 }
 
+async function getVacancyData() {
+  const sheets = await getGoogleSheets();
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: VACANCY_SHEET_ID,
+      range: 'Vacancy!A1:D',
+    });
+    const rows = res.data.values;
+    if (!rows || rows.length < 2) return {};
+    const vacancyMap = {};
+    rows.slice(1).forEach(row => {
+      const unit = (row[0] || '').toString().trim();
+      const status = (row[1] || '').toString().trim();
+      if (unit) vacancyMap[unit] = status;
+    });
+    console.log('[Vacancy] Loaded ' + Object.keys(vacancyMap).length + ' units from Vacancy tab');
+    return vacancyMap;
+  } catch (err) {
+    console.error('[Vacancy] Failed to load vacancy data:', err.message);
+    return {};
+  }
+}
+
 async function getProperties() {
   const sheets = await getGoogleSheets();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: 'Properties!A1:K',
   });
-
   const rows = res.data.values;
   if (!rows || rows.length < 2) return [];
-
   const headers = rows[0];
-  return rows.slice(1).map(row => {
+  const allProperties = rows.slice(1).map(row => {
     const obj = {};
     headers.forEach((h, i) => { obj[h] = row[i] || ''; });
     return obj;
   });
+  // Load vacancy data and filter to only show VACANT/AVAILABLE units
+  const vacancyMap = await getVacancyData();
+  if (Object.keys(vacancyMap).length === 0) {
+    // If vacancy sheet is empty or unavailable, return all properties
+    console.log('[Vacancy] No vacancy data available, returning all properties');
+    return allProperties;
+  }
+  const vacantProperties = allProperties.filter(prop => {
+    const unitKey = (prop['Unit'] || prop['unit'] || prop['Unit Number'] || '').toString().trim();
+    if (!unitKey) return true; // include if no unit key found
+    const status = vacancyMap[unitKey];
+    if (!status) return true; // include if not in vacancy sheet
+    return status.toLowerCase() === 'vacant' || status.toLowerCase() === 'available';
+  });
+  console.log('[Vacancy] Filtered: ' + vacantProperties.length + ' vacant out of ' + allProperties.length + ' total');
+  return vacantProperties;
 }
 
 async function logLead({ phone, name, language, question, interestedUnit, status }) {
