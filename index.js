@@ -209,6 +209,67 @@ async function askClaude(phone, userMessage, properties) {
   return assistantText;
 }
 
+// --- Twilio Conversations Webhook (onMessageAdded POST) ---
+app.post('/conversations-webhook', async (req, res) => {
+  // Respond immediately so Twilio doesn't retry
+  res.status(200).send('{}');
+
+  try {
+    const eventType = req.body.EventType;
+    if (eventType !== 'onMessageAdded') return;
+
+    const conversationSid = req.body.ConversationSid;
+    const author = req.body.Author || '';
+    const participantSid = req.body.ParticipantSid || '';
+    const userMessage = req.body.Body || '';
+
+    // Ignore messages sent by the bot itself (no ParticipantSid = system/bot)
+    // Bot messages come without a phone number author
+    if (!author || author.startsWith('bot') || !userMessage) return;
+    // Skip if this looks like it was sent by us (no ParticipantSid usually means bot message)
+    if (!participantSid) return;
+
+    const phone = author.replace('whatsapp:', '').replace(/^\+/, '');
+
+    console.log(`[CONV] ConvSid: ${conversationSid} | From: ${author} | Msg: ${userMessage}`);
+
+    const properties = await getVacantProperties();
+    const claudeResponse = await askClaude(phone, userMessage, properties);
+
+    let parsed;
+    try {
+      const jsonMatch = claudeResponse.match(/\{[\s\S]*\}/);
+      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { reply: claudeResponse };
+    } catch {
+      parsed = { reply: claudeResponse };
+    }
+
+    const replyText = parsed.reply || claudeResponse;
+    const interestedUnit = parsed.interested_unit || '';
+    const collectedName = parsed.collected_name || '';
+
+    const isArabic = /[\u0600-\u06FF]/.test(userMessage);
+    await logLead({
+      phone,
+      name: collectedName,
+      language: isArabic ? 'Arabic' : 'English',
+      question: userMessage,
+      interestedUnit,
+      status: interestedUnit ? 'Interested' : 'New',
+    });
+
+    // Reply via Conversations API
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    await twilioClient.conversations.v1.conversations(conversationSid).messages.create({
+      body: replyText,
+    });
+
+    console.log(`[CONV] Replied to ${conversationSid}`);
+  } catch (error) {
+    logError(error);
+  }
+});
+
 // --- Twilio WhatsApp Webhook ---
 app.post('/webhook', async (req, res) => {
   try {
