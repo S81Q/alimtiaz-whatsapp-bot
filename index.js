@@ -21,6 +21,28 @@ const logError = (error) => {
 // --- Google Sheets Setup ---
 let sheetsClient;
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const CONFIG_SHEET_ID = '1YrwEyeegt-AbxmpJSizTzl_a0Oedg6ooVuZw6Z47XLQ';
+
+// Config cache loaded from Config sheet
+let configCache = {};
+async function loadConfig() {
+  try {
+    const sheets = await getGoogleSheets();
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: CONFIG_SHEET_ID,
+      range: 'Config!A:B',
+    });
+    (res.data.values || []).slice(1).forEach(row => {
+      if (row[0] && row[1]) configCache[row[0]] = row[1];
+    });
+    console.log('[Config] Loaded', Object.keys(configCache).length, 'keys from Config sheet');
+  } catch (e) {
+    console.error('[Config] Failed to load config sheet:', e.message);
+  }
+}
+function getConfig(key) {
+  return process.env[key] || configCache[key] || '';
+}
 
 async function getGoogleSheets() {
   if (sheetsClient) return sheetsClient;
@@ -259,7 +281,7 @@ app.post('/conversations-webhook', async (req, res) => {
     });
 
     // Reply via Conversations API
-    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const twilioClient = twilio(getConfig('TWILIO_ACCOUNT_SID'), getConfig('TWILIO_AUTH_TOKEN'));
     await twilioClient.conversations.v1.conversations(conversationSid).messages.create({
       body: replyText,
     });
@@ -350,6 +372,9 @@ app.get('/health', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
+
+  // Load config (Twilio creds) from Config sheet
+  loadConfig().catch(err => console.error('[Config] Startup load failed:', err.message));
 
   // Run vacancy sync on startup
   syncVacancy().catch(err => console.error('[VacancySync] Startup sync failed:', err.message));
