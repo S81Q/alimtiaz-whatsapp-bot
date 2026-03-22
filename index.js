@@ -7,6 +7,9 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
+// Ad poster modules
+const { startScheduler, triggerManually, getStatus } = require('./scheduler');
+
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
@@ -85,18 +88,21 @@ async function syncVacancy() {
   const headers = propRows[0];
   const unitIdx = headers.indexOf('Unit');
   const statusIdx = headers.indexOf('Status');
+  const notesIdx = headers.indexOf('Notes') !== -1 ? headers.indexOf('Notes') : headers.indexOf('Location');
 
   const now = new Date().toISOString();
   const vacancyData = [
-    ['Unit', 'Status', 'Available_From', 'Updated_At'],
+    ['Unit', 'Status', 'Property_Name', 'Available_From', 'Updated_At'],
     ...propRows.slice(1).map(row => {
       const unit = row[unitIdx] || '';
       const propStatus = (row[statusIdx] || '').trim().toLowerCase();
+      const propertyName = notesIdx >= 0 ? (row[notesIdx] || '') : '';
       // Map property status to vacancy status
       const isVacant = !propStatus || propStatus === 'available' || propStatus === 'vacant';
       return [
         unit,
         isVacant ? 'Vacant' : 'Occupied',
+        propertyName,
         isVacant ? now : '',
         now,
       ];
@@ -119,12 +125,12 @@ async function syncVacancy() {
   // Clear and write
   await sheets.spreadsheets.values.clear({
     spreadsheetId: SHEET_ID,
-    range: 'Vacancy!A:D',
+    range: 'Vacancy!A:E',
   });
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: SHEET_ID,
-    range: 'Vacancy!A1:D' + vacancyData.length,
+    range: 'Vacancy!A1:E' + vacancyData.length,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: vacancyData },
   });
@@ -146,7 +152,7 @@ async function getVacantProperties() {
     }),
     sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Vacancy!A1:D1000',
+      range: 'Vacancy!A1:E1000',
     }).catch(() => ({ data: { values: [] } })),
   ]);
 
@@ -155,11 +161,15 @@ async function getVacantProperties() {
   if (propRows.length < 2) return [];
 
   const vacHeaders = vacancyRows[0] || [];
+  const vacUnitIdx = vacHeaders.indexOf('Unit');
+  const vacStatusIdx = vacHeaders.indexOf('Status');
+  const vacNameIdx = vacHeaders.indexOf('Property_Name');
   const vacancyMap = {};
   vacancyRows.slice(1).forEach(row => {
-    const unit = row[vacHeaders.indexOf('Unit')];
-    const status = row[vacHeaders.indexOf('Status')];
-    if (unit) vacancyMap[unit] = status;
+    const unit = row[vacUnitIdx];
+    const status = row[vacStatusIdx];
+    const propertyName = vacNameIdx >= 0 ? (row[vacNameIdx] || '') : '';
+    if (unit) vacancyMap[unit] = { status, propertyName };
   });
 
   const propHeaders = propRows[0];
@@ -169,9 +179,15 @@ async function getVacantProperties() {
       propHeaders.forEach((h, i) => { obj[h] = row[i] || ''; });
       return obj;
     })
+    .map(prop => {
+      const vac = vacancyMap[prop.Unit];
+      if (vac && vac.propertyName && !prop.Notes) prop.Property_Name = vac.propertyName;
+      return prop;
+    })
     .filter(prop => {
-      const status = vacancyMap[prop.Unit];
-      return !status || status === 'Vacant' || status === 'Available';
+      const vac = vacancyMap[prop.Unit];
+      if (!vac) return true;
+      return vac.status === 'Vacant' || vac.status === 'Available';
     });
 }
 
@@ -360,13 +376,55 @@ app.post('/sync-vacancy', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════
+// AD POSTER ENDPOINTS
+// ══════════════════════════════════════════════════════
+
+// POST /run-posting  → Run full posting for all vacant units
+app.post('/run-posting', async (req, res) => {
+  const { testOnly, limitToUnit, platforms } = req.body || {};
+  res.json({ status: 'started', message: 'Ad posting run started. Check Ad_Log sheet for results.' });
+  // Run async after response sent
+  triggerManually({ testOnly: !!testOnly, limitToUnit, platforms }).catch(err =>
+    logError(new Error('[run-posting] ' + err.message))
+  );
+});
+
+// POST /test-posting  → Test post only the first vacant unit on both platforms
+app.post('/test-posting', async (req, res) => {
+  try {
+    const result = await triggerManually({ testOnly: true });
+    res.json({ status: 'done', result });
+  } catch (e) {
+    logError(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+// POST /post-unit  → Post a specific unit: body { unit: "A-101" }
+app.post('/post-unit', async (req, res) => {
+  const { unit, platforms } = req.body || {};
+  if (!unit) return res.status(400).json({ error: 'unit is required' });
+  res.json({ status: 'started', unit });
+  triggerManually({ limitToUnit: unit, platforms }).catch(err =>
+    logError(new Error('[post-unit] ' + err.message))
+  );
+});
+
+// GET /poster-status  → Check scheduler status and next run
+app.get('/poster-status', (req, res) => {
+  res.json(getStatus());
+});
+
+// ══════════════════════════════════════════════════════
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', version: 'v2-vacancy-sync' });
+  res.json({ status: 'healthy', version: 'v3-ad-poster' });
 });
 
 const PORT = process.env.PORT || 3000;
@@ -383,4 +441,7 @@ app.listen(PORT, () => {
   setInterval(() => {
     syncVacancy().catch(err => console.error('[VacancySync] Scheduled sync failed:', err.message));
   }, 60 * 60 * 1000);
+
+  // Start the ad poster scheduler (monthly cron + vacancy change monitor)
+  startScheduler();
 });
