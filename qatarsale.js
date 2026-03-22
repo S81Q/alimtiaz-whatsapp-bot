@@ -179,60 +179,95 @@ async function login() {
 }
 
 // ─────────────────────────────────────────────
-// Category field definitions
+// Hardcoded definition IDs (from /api/v2/Category/GetCategories)
+// cityDefinitionId and addressDefinitionId per category
 // ─────────────────────────────────────────────
+const CATEGORY_DEFINITIONS = {
+  264: { cityDef: 5351, addressDef: 5352 },  // Villas
+  265: { cityDef: 5371, addressDef: 5372 },  // Apartments
+  317: { cityDef: 6245, addressDef: 6246 },  // Commercial Shops
+  318: { cityDef: 6234, addressDef: 6235 },  // Commercial Offices
+  319: { cityDef: 6622, addressDef: 6623 },  // Buildings/Towers (parent defs)
+  320: { cityDef: 6622, addressDef: 6623 },  // Lands
+  321: { cityDef: 6622, addressDef: 6623 },  // Farms & Resorts
+};
+
+// City name → definition value ID (QatarSale city IDs)
+// Doha is the primary city; fallback to Doha if unknown
+const CITY_DEF_VALUES = {
+  'doha': '1',
+  'al wakra': '2',
+  'al khor': '3',
+  'lusail': '4',
+  'dukhan': '5',
+  'mesaieed': '6',
+  'al shamal': '7',
+};
+
+function getCityDefValue(location) {
+  if (!location) return '1'; // Doha default
+  const lower = location.toLowerCase();
+  for (const [city, val] of Object.entries(CITY_DEF_VALUES)) {
+    if (lower.includes(city)) return val;
+  }
+  return '1'; // Default: Doha
+}
+
 async function getFieldDefinitions(categoryId, token) {
+  // Try the Mapping endpoint first (may return 500 on server side)
   try {
     const res = await axios.post(
       `${BASE_URL}/api/Products/Mapping`,
       { categoryId },
-      { headers: { ...BASE_HEADERS, Authorization: `Bearer ${token}` } }
+      {
+        headers: {
+          ...BASE_HEADERS,
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        },
+      }
     );
-    return res.data;
+    if (res.data && res.data.definitions) {
+      return res.data;
+    }
   } catch (e) {
-    console.warn('[QatarSale] Could not fetch field definitions:', e.message);
-    return null;
+    console.warn('[QatarSale] Mapping endpoint failed (will use hardcoded defs):', e.response?.status || e.message);
   }
+  return null; // Will fall through to hardcoded definitions
 }
 
-function buildDefinitions(mappingData, property) {
+function buildDefinitions(mappingData, property, categoryId) {
   const definitions = [];
-  if (!mappingData?.definitions) return definitions;
 
-  for (const def of mappingData.definitions) {
-    const name = (def.name || '').toLowerCase();
-    let value = null;
+  // If we have mapping data from the API, use it
+  if (mappingData?.definitions) {
+    for (const def of mappingData.definitions) {
+      const name = (def.name || '').toLowerCase();
+      let value = null;
 
-    if (name.includes('bedroom') || name.includes('room')) {
-      value = property.Bedrooms;
-    } else if (name.includes('bathroom')) {
-      value = property.Bathrooms;
-    } else if (name.includes('floor')) {
-      value = property.Floor;
-    } else if (name.includes('size') || name.includes('area')) {
-      value = property.Size_sqm;
-    } else if (name.includes('furnish')) {
-      value = 'Unfurnished';
-    } else if (name.includes('type') || name.includes('kind')) {
-      value = property.Type;
-    }
+      if (name.includes('bedroom') || name.includes('room')) value = property.Bedrooms;
+      else if (name.includes('bathroom')) value = property.Bathrooms;
+      else if (name.includes('floor')) value = property.Floor;
+      else if (name.includes('size') || name.includes('area')) value = property.Size_sqm;
+      else if (name.includes('furnish')) value = 'Unfurnished';
+      else if (name.includes('city')) value = getCityDefValue(property.Location);
+      else if (name.includes('address') || name.includes('location')) value = property.Location || 'Doha';
 
-    if (value !== null && value !== undefined && value !== '') {
-      // Try to match to definition values if they exist
-      if (def.values && def.values.length > 0) {
-        const strVal = String(value).toLowerCase();
-        const match = def.values.find(v =>
-          String(v.name || v.value || '').toLowerCase().includes(strVal) ||
-          strVal.includes(String(v.name || v.value || '').toLowerCase())
-        );
-        if (match) {
-          definitions.push({ definitionId: def.id, value: String(match.id || match.value || value) });
-        }
-      } else {
+      if (value !== null && value !== undefined && value !== '') {
         definitions.push({ definitionId: def.id, value: String(value) });
       }
     }
+    return definitions;
   }
+
+  // Fallback: use hardcoded definition IDs from GetCategories response
+  const catDefs = CATEGORY_DEFINITIONS[categoryId] || CATEGORY_DEFINITIONS[265];
+  const cityValue = getCityDefValue(property.Location);
+  const address = [property.Zone, property.Street, property.Building, property.Location]
+    .filter(Boolean).join(', ') || 'Doha, Qatar';
+
+  definitions.push({ definitionId: catDefs.cityDef, value: cityValue });
+  definitions.push({ definitionId: catDefs.addressDef, value: address });
 
   return definitions;
 }
@@ -289,7 +324,7 @@ async function postAd(property, token) {
 
   // Fetch field definitions for this category
   const mapping = await getFieldDefinitions(categoryId, token);
-  const definitions = buildDefinitions(mapping, property);
+  const definitions = buildDefinitions(mapping, property, categoryId);
 
   const body = {
     title: buildTitleAr(property),
