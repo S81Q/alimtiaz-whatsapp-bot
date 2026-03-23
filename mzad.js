@@ -13,6 +13,7 @@
  *   MZAD_SESSION        – Stored mzadqatar_session cookie value
  *   MZAD_XSRF_TOKEN     – Stored XSRF-TOKEN cookie value
  *   MZAD_PHONE          – Phone number (default: 70297066)
+ *   MZAD_PASSWORD       – Account password (preferred login method)
  *   TWOCAPTCHA_API_KEY  – For reCAPTCHA v3 solving (optional)
  *
  * API Base: https://mzadqatar.com
@@ -175,6 +176,63 @@ async function isSessionValid(session, xsrf) {
 }
 
 // ─────────────────────────────────────────────
+// Login with password
+// ─────────────────────────────────────────────
+async function loginWithPassword() {
+  const password = process.env.MZAD_PASSWORD;
+  if (!password) throw new Error('MZAD_PASSWORD not set');
+
+  const phone = process.env.MZAD_PHONE || '70297066';
+
+  // Step 1: Get fresh cookies
+  const initial = await getInitialCookies();
+  let { session, xsrf, csrf } = initial;
+
+  // Step 2: Solve reCAPTCHA v3
+  const recaptchaToken = await solveRecaptchaV3('login');
+
+  console.log('[Mzad] Logging in with password for phone', phone, '...');
+  const loginRes = await axios.post(`${BASE_URL}/en/login`, {
+    phone,
+    password,
+    recaptchaToken: recaptchaToken || 'placeholder-token',
+  }, {
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-TOKEN': csrf,
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-Inertia': 'true',
+      'Cookie': buildCookieStr(session, xsrf),
+      'Origin': BASE_URL,
+      'Referer': `${BASE_URL}/en/login`,
+      'Accept': 'application/json',
+    },
+    maxRedirects: 0,
+    validateStatus: s => s < 500,
+  });
+
+  const resCookies = parseCookies(loginRes.headers['set-cookie']);
+  const finalSession = resCookies['mzadqatar_session'] || session;
+  const finalXsrf = resCookies['XSRF-TOKEN'] || xsrf;
+  const finalCsrf = decodedXsrf(finalXsrf);
+
+  console.log('[Mzad] Password login status:', loginRes.status);
+
+  const valid = await isSessionValid(finalSession, finalXsrf);
+  if (!valid) throw new Error('Mzad: Password login failed – session not authenticated');
+
+  process.env.MZAD_SESSION = finalSession;
+  process.env.MZAD_XSRF_TOKEN = finalXsrf;
+
+  console.log('[Mzad] Password login successful! Session established.');
+  console.log('[Mzad] Update Railway env vars:');
+  console.log(`  MZAD_SESSION=${finalSession.substring(0, 40)}...`);
+  console.log(`  MZAD_XSRF_TOKEN=${finalXsrf.substring(0, 40)}...`);
+
+  return { session: finalSession, xsrf: finalXsrf, csrfToken: finalCsrf };
+}
+
+// ─────────────────────────────────────────────
 // Login with OTP
 // ─────────────────────────────────────────────
 async function loginWithOtp() {
@@ -279,6 +337,14 @@ async function getSession() {
     console.log('[Mzad] Stored session expired, re-logging in...');
   } else {
     console.log('[Mzad] No stored session, logging in...');
+  }
+
+  if (process.env.MZAD_PASSWORD) {
+    try {
+      return await loginWithPassword();
+    } catch (e) {
+      console.warn('[Mzad] Password login failed, falling back to OTP:', e.message);
+    }
   }
 
   return await loginWithOtp();
