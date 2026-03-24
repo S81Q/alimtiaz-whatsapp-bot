@@ -116,8 +116,8 @@ async function getVacantUnits() {
   const vacantMap = {}; // unit → { propertyName, availableFrom }
   for (const row of vacRows.slice(1)) {
     const unit = (row[vi.unit] || '').trim();
-    const status = (row[vi.status] || '').trim();
-    if (unit && status === 'Vacant') {
+    const status = (row[vi.status] || '').trim().toLowerCase();
+    if (unit && status === 'vacant') {
       vacantMap[unit] = {
         Property_Name: vi.name >= 0 ? (row[vi.name] || '') : '',
         Available_From: vi.from >= 0 ? (row[vi.from] || '') : '',
@@ -125,8 +125,9 @@ async function getVacantUnits() {
     }
   }
 
-  if (Object.keys(vacantMap).length === 0) {
-    console.log('[Sheets] No vacant units found');
+  const vacantCount = Object.keys(vacantMap).length;
+  console.log(`[Sheets] Vacant units found: ${vacantCount} → [${Object.keys(vacantMap).join(', ')}]`);
+  if (vacantCount === 0) {
     return [];
   }
 

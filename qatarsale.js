@@ -18,6 +18,7 @@
  */
 
 const axios = require('axios');
+const { buildTitleAr, buildTitleEn, buildDescription } = require('./poster');
 
 const BASE_URL = 'https://production-api.qatarsale.com';
 const QS_RECAPTCHA_SITE_KEY = '6LeDzAYqAAAAADbAVLOP8T-O62zGRuNH4ID3wBWr';
@@ -327,43 +328,7 @@ function buildDefinitions(mappingData, property, categoryId) {
   return definitions;
 }
 
-// ─────────────────────────────────────────────
-// Ad content builders
-// ─────────────────────────────────────────────
-function buildTitleAr(property) {
-  const name = property.Property_Name || property.Unit || '';
-  const location = property.Location || 'قطر';
-  return `${name} - للإيجار - ${location}`;
-}
-
-function buildTitleEn(property) {
-  const type = property.Type || 'Property';
-  const location = property.Location || 'Qatar';
-  return `${type} For Rent - ${location} - Qatar`;
-}
-
-function buildDescription(property) {
-  const lines = [
-    property.Property_Name && `الاسم: ${property.Property_Name}`,
-    property.Unit && `رقم الوحدة: ${property.Unit}`,
-    property.Type && `النوع: ${property.Type}`,
-    property.Size_sqm && `المساحة: ${property.Size_sqm} م²`,
-    property.Bedrooms && `غرف النوم: ${property.Bedrooms}`,
-    property.Bathrooms && `دورات المياه: ${property.Bathrooms}`,
-    property.Floor && `الطابق: ${property.Floor}`,
-    property.Location && `الموقع: ${property.Location}`,
-    property.Zone && `المنطقة: ${property.Zone}`,
-    property.Street && `الشارع: ${property.Street}`,
-    property.Building && `المبنى: ${property.Building}`,
-    property.Rent_QAR && `الإيجار الشهري: ${property.Rent_QAR} ريال قطري`,
-    property.Available_From && `متاح من: ${property.Available_From}`,
-    property.Notes && `ملاحظات: ${property.Notes}`,
-    '',
-    'للاستفسار والتواصل: شركة الامتياز والجودة العقارية | +974 70297066',
-  ].filter(v => v !== false && v !== null && v !== undefined);
-
-  return lines.join('\n');
-}
+// Ad content builders — imported from poster.js (buildTitleAr, buildTitleEn, buildDescription)
 
 // ─────────────────────────────────────────────
 // Main post function

@@ -21,6 +21,7 @@
 
 const axios = require('axios');
 const FormData = require('form-data');
+const { buildTitleAr, buildTitleEn, buildDescription } = require('./poster');
 
 const BASE_URL = 'https://mzadqatar.com';
 const MZAD_RECAPTCHA_SITE_KEY = '6Lc-0vApAAAAAFu7_SOXa6yJIDgm6qAl9LY1vYVI';
@@ -370,48 +371,7 @@ async function fetchCategories(session, xsrf) {
   }
 }
 
-// ─────────────────────────────────────────────
-// Ad content builders
-// ─────────────────────────────────────────────
-function buildDescriptionAr(property) {
-  return [
-    property.Property_Name && `${property.Property_Name}`,
-    property.Unit && `رقم الوحدة: ${property.Unit}`,
-    property.Type && `النوع: ${property.Type}`,
-    property.Size_sqm && `المساحة: ${property.Size_sqm} م²`,
-    property.Bedrooms && `غرف النوم: ${property.Bedrooms}`,
-    property.Bathrooms && `دورات المياه: ${property.Bathrooms}`,
-    property.Floor && `الطابق: ${property.Floor}`,
-    property.Location && `الموقع: ${property.Location}`,
-    property.Zone && `المنطقة: ${property.Zone}`,
-    property.Street && `الشارع: ${property.Street}`,
-    property.Building && `المبنى: ${property.Building}`,
-    property.Rent_QAR && `الإيجار: ${property.Rent_QAR} ريال قطري شهرياً`,
-    property.Notes && property.Notes,
-    '',
-    'للاستفسار: شركة الامتياز والجودة العقارية | +974 70297066',
-  ].filter(v => v !== false && v !== null && v !== undefined).join('\n');
-}
-
-function buildDescriptionEn(property) {
-  return [
-    property.Property_Name && `${property.Property_Name}`,
-    property.Unit && `Unit: ${property.Unit}`,
-    property.Type && `Type: ${property.Type}`,
-    property.Size_sqm && `Size: ${property.Size_sqm} sqm`,
-    property.Bedrooms && `Bedrooms: ${property.Bedrooms}`,
-    property.Bathrooms && `Bathrooms: ${property.Bathrooms}`,
-    property.Floor && `Floor: ${property.Floor}`,
-    property.Location && `Location: ${property.Location}`,
-    property.Zone && `Zone: ${property.Zone}`,
-    property.Street && `Street: ${property.Street}`,
-    property.Building && `Building: ${property.Building}`,
-    property.Rent_QAR && `Rent: QAR ${property.Rent_QAR}/month`,
-    property.Notes && property.Notes,
-    '',
-    'Contact: Al-Imtiaz Wal-Jawada Real Estate | +974 70297066',
-  ].filter(v => v !== false && v !== null && v !== undefined).join('\n');
-}
+// Ad content builders — imported from poster.js (buildTitleAr, buildTitleEn, buildDescription)
 
 // ─────────────────────────────────────────────
 // Main post function
@@ -430,8 +390,7 @@ async function postAd(property, sessionData) {
   const categories = await fetchCategories(session, xsrf);
   const categoryId = getCategoryIdFromList(property.Type, categories);
 
-  const titleAr = `${property.Property_Name || property.Unit} - للإيجار - ${property.Location || 'الدوحة'}`;
-  const titleEn = `${property.Type || 'Property'} For Rent - ${property.Location || 'Doha'} - Qatar`;
+  const desc = buildDescription(property);
 
   const form = new FormData();
   form.append('_token', csrfToken);
@@ -442,10 +401,10 @@ async function postAd(property, sessionData) {
   form.append('price', String(parseInt(property.Rent_QAR) || 0));
   form.append('ad_type', '1');
   form.append('rental_type', '1'); // Monthly
-  form.append('title_ar', titleAr);
-  form.append('title_en', titleEn);
-  form.append('description_ar', buildDescriptionAr(property));
-  form.append('description_en', buildDescriptionEn(property));
+  form.append('title_ar', buildTitleAr(property));
+  form.append('title_en', buildTitleEn(property));
+  form.append('description_ar', desc);
+  form.append('description_en', desc);
   form.append('auto_renew', '0');
 
   // Residential-specific fields
