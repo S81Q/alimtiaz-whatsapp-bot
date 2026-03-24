@@ -406,6 +406,18 @@ app.post('/test-posting', async (req, res) => {
   }
 });
 
+// POST /run-posting-sync  → Run full posting synchronously, wait for result
+app.post('/run-posting-sync', async (req, res) => {
+  try {
+    const { runPosting } = require('./poster');
+    const result = await runPosting({ testOnly: false });
+    res.json({ status: 'done', result });
+  } catch (e) {
+    logError(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
 // POST /post-unit  → Post a specific unit: body { unit: "A-101" }
 app.post('/post-unit', async (req, res) => {
   const { unit, platforms } = req.body || {};
