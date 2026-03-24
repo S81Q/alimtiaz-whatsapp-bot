@@ -428,6 +428,16 @@ app.post('/post-unit', async (req, res) => {
   );
 });
 
+// GET /sa-email  → Return service account client_email (temporary, for sharing Apps Script)
+app.get('/sa-email', (req, res) => {
+  try {
+    const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}');
+    res.json({ client_email: creds.client_email || 'not found' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /patch-apps-script  → One-time: inject webhook call into Apps Script updateVacancySheet
 app.post('/patch-apps-script', async (req, res) => {
   try {
