@@ -18,7 +18,7 @@
  */
 
 const axios = require('axios');
-const { buildTitleAr, buildTitleEn, buildDescription } = require('./poster');
+const { buildTitleAr, buildTitleEn, buildDescription } = require('./ad-builders');
 
 const BASE_URL = 'https://production-api.qatarsale.com';
 const QS_RECAPTCHA_SITE_KEY = '6LeDzAYqAAAAADbAVLOP8T-O62zGRuNH4ID3wBWr';

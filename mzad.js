@@ -21,7 +21,7 @@
 
 const axios = require('axios');
 const FormData = require('form-data');
-const { buildTitleAr, buildTitleEn, buildDescription } = require('./poster');
+const { buildTitleAr, buildTitleEn, buildDescription } = require('./ad-builders');
 
 const BASE_URL = 'https://mzadqatar.com';
 const MZAD_RECAPTCHA_SITE_KEY = '6Lc-0vApAAAAAFu7_SOXa6yJIDgm6qAl9LY1vYVI';
