@@ -428,11 +428,18 @@ app.post('/post-unit', async (req, res) => {
   );
 });
 
-// GET /sa-email  → Return service account client_email (temporary, for sharing Apps Script)
-app.get('/sa-email', (req, res) => {
+// GET /read-apps-script  → Temporary: read Apps Script content for debugging
+app.get('/read-apps-script', async (req, res) => {
   try {
-    const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}');
-    res.json({ client_email: creds.client_email || 'not found' });
+    const { google } = require('googleapis');
+    const SCRIPT_ID = '1O8BXSyFR_SE5Tcj1mU_nrfcZDMsw8GNbIFtaAd4i2ec4en1-U-aOVCXL';
+    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    const auth = new google.auth.GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/script.projects'] });
+    const scriptApi = google.script({ version: 'v1', auth });
+    const contentRes = await scriptApi.projects.getContent({ scriptId: SCRIPT_ID });
+    const files = contentRes.data.files || [];
+    const codeFile = files.find(f => f.name === 'Code' || f.name === 'Code.gs') || files[0];
+    res.json({ files: files.map(f => f.name), source: codeFile ? codeFile.source : null });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
