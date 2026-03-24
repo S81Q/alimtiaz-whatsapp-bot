@@ -61,13 +61,14 @@ async function getGmailClient() {
 async function readOtpFromGmail(platform, maxRetries = 3, retryDelay = 10000) {
   const delay = ms => new Promise(r => setTimeout(r, ms));
 
-  // Build search query: look at emails from last 5 minutes
-  const since = Math.floor((Date.now() - 5 * 60 * 1000) / 1000);
+  // SMS arrives via "SMS Forwarder" app → email from no-reply@sms-forwarder.co to sultanaliqatar81@gmail.com
+  // Body format: "Incoming - Mzad Qatar ... Your MzadQatar code is: 123456"
+  // Body format: "Incoming - QatarSale ... Confirmation code is : 123456"
   const queryMap = {
-    qatarsale: `(from:qatarsale.com OR from:qatarsale OR subject:qatarsale) newer_than:5m`,
-    mzad: `(from:mzadqatar.com OR from:mzad OR subject:mzad) newer_than:5m`,
+    qatarsale: `from:sms-forwarder QatarSale newer_than:5m`,
+    mzad: `from:sms-forwarder MzadQatar newer_than:5m`,
   };
-  const query = queryMap[platform.toLowerCase()] || `subject:OTP newer_than:5m`;
+  const query = queryMap[platform.toLowerCase()] || `from:sms-forwarder newer_than:5m`;
 
   console.log(`[Gmail OTP] Searching for ${platform} OTP in ${GMAIL_USER}...`);
 
