@@ -428,6 +428,87 @@ app.post('/post-unit', async (req, res) => {
   );
 });
 
+// POST /patch-apps-script  → One-time: inject webhook call into Apps Script updateVacancySheet
+app.post('/patch-apps-script', async (req, res) => {
+  try {
+    const { google } = require('googleapis');
+    const SCRIPT_ID = '1O8BXSyFR_SE5Tcj1mU_nrfcZDMsw8GNbIFtaAd4i2ec4en1-U-aOVCXL';
+    const WEBHOOK_CODE = `
+    // Auto-trigger Mzad ad posting after vacancy update
+    try {
+      var postUrl = 'https://alimtiaz-whatsapp-bot-production.up.railway.app/run-posting';
+      var postOptions = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        payload: JSON.stringify({ source: 'vacancy-script' }),
+        muteHttpExceptions: true
+      };
+      var postResponse = UrlFetchApp.fetch(postUrl, postOptions);
+      Logger.log('Mzad posting triggered: ' + postResponse.getResponseCode());
+    } catch(triggerErr) {
+      Logger.log('Failed to trigger Mzad posting: ' + triggerErr.message);
+    }`;
+
+    let credentials;
+    if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+      credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    } else {
+      return res.status(500).json({ error: 'GOOGLE_SERVICE_ACCOUNT_JSON not set' });
+    }
+
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: [
+        'https://www.googleapis.com/auth/script.projects',
+        'https://www.googleapis.com/auth/drive',
+      ],
+    });
+
+    const scriptApi = google.script({ version: 'v1', auth });
+
+    // Step 1: Read current content
+    const contentRes = await scriptApi.projects.getContent({ scriptId: SCRIPT_ID });
+    const files = contentRes.data.files || [];
+    const codeFile = files.find(f => f.name === 'Code' || f.name === 'Code.gs') || files[0];
+    if (!codeFile) return res.status(500).json({ error: 'Code.gs not found in script', files: files.map(f => f.name) });
+
+    const originalSource = codeFile.source;
+
+    // Step 2: Check if webhook already present
+    if (originalSource.includes('alimtiaz-whatsapp-bot-production.up.railway.app/run-posting')) {
+      return res.json({ status: 'already_patched', message: 'Webhook code already present in script' });
+    }
+
+    // Step 3: Inject before the closing } of the second updateVacancySheet catch block
+    const anchor = `    Logger.log('updateVacancySheet error: ' + e.message);
+  }
+}`;
+    if (!originalSource.includes(anchor)) {
+      return res.status(500).json({
+        error: 'Anchor text not found — script structure may have changed',
+        hint: 'Search for: updateVacancySheet error',
+      });
+    }
+
+    const patchedSource = originalSource.replace(
+      anchor,
+      `    Logger.log('updateVacancySheet error: ' + e.message);\n  }\n${WEBHOOK_CODE}\n}`
+    );
+
+    // Step 4: Push updated content
+    codeFile.source = patchedSource;
+    await scriptApi.projects.updateContent({
+      scriptId: SCRIPT_ID,
+      requestBody: { files },
+    });
+
+    res.json({ status: 'patched', message: 'Webhook code injected into updateVacancySheet successfully' });
+  } catch (e) {
+    logError(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
 // GET /poster-status  → Check scheduler status and next run
 app.get('/poster-status', (req, res) => {
   res.json(getStatus());
