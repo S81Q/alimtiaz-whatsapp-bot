@@ -83,10 +83,10 @@ async function solveWithCapSolver(pageUrl) {
     appId: '9E6BC9E4-B5E6-4709-BF81-E6CECF5ED706',
     clientKey: apiKey,
     task: {
-      type: 'ReCaptchaV2EnterpriseTaskProxyLess',
+      type: 'ReCaptchaV3EnterpriseTaskProxyLess',
       websiteURL: pageUrl,
       websiteKey: QS_RECAPTCHA_SITE_KEY,
-      enterprisePayload: { s: 'login' },
+      pageAction: 'login',
     },
   });
 
