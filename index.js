@@ -428,22 +428,6 @@ app.post('/post-unit', async (req, res) => {
   );
 });
 
-// GET /read-apps-script  → Temporary: read Apps Script content for debugging
-app.get('/read-apps-script', async (req, res) => {
-  try {
-    const { google } = require('googleapis');
-    const SCRIPT_ID = '1O8BXSyFR_SE5Tcj1mU_nrfcZDMsw8GNbIFtaAd4i2ec4en1-U-aOVCXL';
-    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-    const auth = new google.auth.GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/script.projects'] });
-    const scriptApi = google.script({ version: 'v1', auth });
-    const contentRes = await scriptApi.projects.getContent({ scriptId: SCRIPT_ID });
-    const files = contentRes.data.files || [];
-    const codeFile = files.find(f => f.name === 'Code' || f.name === 'Code.gs') || files[0];
-    res.json({ files: files.map(f => f.name), source: codeFile ? codeFile.source : null });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 // POST /patch-apps-script  → One-time: inject webhook call into Apps Script updateVacancySheet
 app.post('/patch-apps-script', async (req, res) => {
@@ -497,9 +481,8 @@ app.post('/patch-apps-script', async (req, res) => {
     }
 
     // Step 3: Inject before the closing } of the second updateVacancySheet catch block
-    const anchor = `    Logger.log('updateVacancySheet error: ' + e.message);
-  }
-}`;
+    // Actual script has empty lines between the catch body lines
+    const anchor = "    Logger.log('updateVacancySheet error: ' + e.message);\n\n  }\n}";
     if (!originalSource.includes(anchor)) {
       return res.status(500).json({
         error: 'Anchor text not found — script structure may have changed',
@@ -509,7 +492,7 @@ app.post('/patch-apps-script', async (req, res) => {
 
     const patchedSource = originalSource.replace(
       anchor,
-      `    Logger.log('updateVacancySheet error: ' + e.message);\n  }\n${WEBHOOK_CODE}\n}`
+      `    Logger.log('updateVacancySheet error: ' + e.message);\n\n  }\n${WEBHOOK_CODE}\n}`
     );
 
     // Step 4: Push updated content
