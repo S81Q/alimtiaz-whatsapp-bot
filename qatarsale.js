@@ -11,7 +11,8 @@
  *   QS_REFRESH_TOKEN   – Refresh token (long-lived, no reCAPTCHA)
  *   QS_USERNAME        – Login username/phone (default: 6311425554212)
  *   QS_PASSWORD        – Login password (default: CSHW2BT4)
- *   TWOCAPTCHA_API_KEY – Optional, for reCAPTCHA Enterprise solving
+ *   CAPSOLVER_API_KEY  – Optional, for reCAPTCHA Enterprise solving (preferred)
+ *   TWOCAPTCHA_API_KEY – Optional, for reCAPTCHA Enterprise solving (fallback)
  *
  * API Base: https://production-api.qatarsale.com
  */
@@ -53,14 +54,68 @@ function getCategoryId(type) {
 }
 
 // ─────────────────────────────────────────────
-// reCAPTCHA solving via 2captcha (optional)
+// reCAPTCHA solving via CapSolver / 2captcha
 // ─────────────────────────────────────────────
 async function solveRecaptchaEnterprise(pageUrl) {
-  const apiKey = process.env.TWOCAPTCHA_API_KEY;
-  if (!apiKey) {
-    throw new Error('TWOCAPTCHA_API_KEY not set – cannot solve reCAPTCHA Enterprise');
+  // Strategy 1: CapSolver (better success rate for reCAPTCHA Enterprise)
+  if (process.env.CAPSOLVER_API_KEY) {
+    try {
+      return await solveWithCapSolver(pageUrl);
+    } catch (e) {
+      console.warn('[QS CapSolver] Failed:', e.message, '- trying 2captcha...');
+    }
   }
 
+  // Strategy 2: 2Captcha (fallback)
+  if (process.env.TWOCAPTCHA_API_KEY) {
+    return await solveWith2Captcha(pageUrl);
+  }
+
+  throw new Error('No captcha solver configured. Set CAPSOLVER_API_KEY or TWOCAPTCHA_API_KEY');
+}
+
+async function solveWithCapSolver(pageUrl) {
+  const apiKey = process.env.CAPSOLVER_API_KEY;
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  console.log('[QS CapSolver] Submitting reCAPTCHA Enterprise task...');
+  const createRes = await axios.post('https://api.capsolver.com/createTask', {
+    appId: '9E6BC9E4-B5E6-4709-BF81-E6CECF5ED706',
+    clientKey: apiKey,
+    task: {
+      type: 'ReCaptchaV2EnterpriseTaskProxyLess',
+      websiteURL: pageUrl,
+      websiteKey: QS_RECAPTCHA_SITE_KEY,
+      enterprisePayload: { s: 'login' },
+    },
+  });
+
+  if (createRes.data.errorId !== 0) {
+    throw new Error('CapSolver create failed: ' + (createRes.data.errorDescription || JSON.stringify(createRes.data)));
+  }
+
+  const taskId = createRes.data.taskId;
+  console.log('[QS CapSolver] Task created:', taskId);
+
+  for (let i = 0; i < 30; i++) {
+    await delay(3000);
+    const resultRes = await axios.post('https://api.capsolver.com/getTaskResult', {
+      clientKey: apiKey,
+      taskId,
+    });
+    if (resultRes.data.status === 'ready') {
+      console.log('[QS CapSolver] reCAPTCHA Enterprise solved!');
+      return resultRes.data.solution.gRecaptchaResponse;
+    }
+    if (resultRes.data.errorId !== 0) {
+      throw new Error('CapSolver error: ' + resultRes.data.errorDescription);
+    }
+  }
+  throw new Error('CapSolver: timeout');
+}
+
+async function solveWith2Captcha(pageUrl) {
+  const apiKey = process.env.TWOCAPTCHA_API_KEY;
   const delay = ms => new Promise(r => setTimeout(r, ms));
 
   const submitRes = await axios.post('http://2captcha.com/in.php', null, {
@@ -82,7 +137,7 @@ async function solveRecaptchaEnterprise(pageUrl) {
   const taskId = submitRes.data.request;
   console.log('[QS 2captcha] Task submitted:', taskId);
 
-  for (let i = 0; i < 24; i++) { // up to 2 min
+  for (let i = 0; i < 24; i++) {
     await delay(5000);
     const pollRes = await axios.get('http://2captcha.com/res.php', {
       params: { key: apiKey, action: 'get', id: taskId, json: 1 },
