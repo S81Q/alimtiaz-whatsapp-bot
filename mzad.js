@@ -169,7 +169,7 @@ async function isSessionValid(session, xsrf) {
       maxRedirects: 0,
       validateStatus: s => s < 500,
     });
-    return res.status === 200;
+    return res.status === 200 || res.status === 409;
   } catch {
     return false;
   }
