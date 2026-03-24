@@ -480,20 +480,26 @@ app.post('/patch-apps-script', async (req, res) => {
       return res.json({ status: 'already_patched', message: 'Webhook code already present in script' });
     }
 
-    // Step 3: Inject before the closing } of the second updateVacancySheet catch block
-    // Actual script has empty lines between the catch body lines
-    const anchor = "    Logger.log('updateVacancySheet error: ' + e.message);\n\n  }\n}";
-    if (!originalSource.includes(anchor)) {
+    // Step 3: Inject before the final closing } of the second updateVacancySheet catch block
+    // Use regex to handle any whitespace/newline variation
+    const anchorRegex = /([ \t]*Logger\.log\('updateVacancySheet error: ' \+ e\.message\);[\r\n\s]*\}[\r\n\s]*\})/;
+    if (!anchorRegex.test(originalSource)) {
+      // Debug: return tail of source to diagnose
       return res.status(500).json({
-        error: 'Anchor text not found — script structure may have changed',
-        hint: 'Search for: updateVacancySheet error',
+        error: 'Anchor regex not found',
+        tail: originalSource.slice(-300),
       });
     }
 
-    const patchedSource = originalSource.replace(
-      anchor,
-      `    Logger.log('updateVacancySheet error: ' + e.message);\n\n  }\n${WEBHOOK_CODE}\n}`
-    );
+    // Replace LAST match to target the second (bottom) updateVacancySheet function
+    let lastMatch, lastIndex;
+    let tempRe = new RegExp(anchorRegex.source, 'g');
+    let m;
+    while ((m = tempRe.exec(originalSource)) !== null) { lastMatch = m[0]; lastIndex = m.index; }
+
+    const patchedSource = originalSource.slice(0, lastIndex) +
+      lastMatch.replace(/(\}\s*\})\s*$/, `\n${WEBHOOK_CODE}\n}`) +
+      originalSource.slice(lastIndex + lastMatch.length);
 
     // Step 4: Push updated content
     codeFile.source = patchedSource;
