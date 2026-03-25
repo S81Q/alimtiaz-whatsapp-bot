@@ -854,10 +854,14 @@ async function postAd(property, sessionData) {
       const s2 = await inertiaPost(`${BASE}/en/add_advertise`, {
         step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
       });
+      const s2AddData = s2.json?.props?.getAddAdvertiseData || {};
       results.step2 = {
         status: s2.status,
         errors: s2.json?.props?.errors,
-        addDataKeys: Object.keys(s2.json?.props?.getAddAdvertiseData || {}),
+        addDataKeys: Object.keys(s2AddData),
+        apiData: JSON.stringify(s2AddData.apiData || {}).substring(0, 2000),
+        prevData: JSON.stringify(s2AddData.prevData || {}).substring(0, 500),
+        isCompleted: s2AddData.isCompleted,
       };
 
       // Step 3
@@ -876,9 +880,34 @@ async function postAd(property, sessionData) {
         fullResponse: JSON.stringify(s3.json || {}).substring(0, 3000),
       };
 
-      // If step 3 didn't complete, try sending as multipart FormData
-      // (Inertia's useForm uses FormData when files are present)
+      // If step 3 didn't complete with JSON, try FormData WITH a real image
       if (!s3AddData.isCompleted) {
+        // Generate a placeholder property image using Canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = 800;
+        canvas.height = 600;
+        const ctx = canvas.getContext('2d');
+        // Blue gradient background
+        const grad = ctx.createLinearGradient(0, 0, 800, 600);
+        grad.addColorStop(0, '#1a5276');
+        grad.addColorStop(1, '#2980b9');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 800, 600);
+        // White text
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 36px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Property For Rent', 400, 250);
+        ctx.font = '24px Arial';
+        ctx.fillText(step3Data.productNameEnglish || 'Apartment', 400, 300);
+        ctx.fillText(step3Data.productPrice + ' QAR/month', 400, 350);
+        ctx.font = '18px Arial';
+        ctx.fillText('Al-Imtiaz Property Management', 400, 420);
+
+        // Convert canvas to Blob
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+        const imageFile = new File([blob], 'property.jpg', { type: 'image/jpeg' });
+
         const fd = new FormData();
         // Flatten step data into FormData with bracket notation
         function appendObj(prefix, obj) {
@@ -889,8 +918,9 @@ async function postAd(property, sessionData) {
             } else if (typeof v === 'boolean') {
               fd.append(key, v ? '1' : '0');
             } else if (Array.isArray(v)) {
+              // Skip images array — we handle it separately
+              if (k === 'images') return;
               if (v.length === 0) {
-                // Send empty array marker
                 fd.append(`${key}[]`, '');
               } else {
                 v.forEach((item, idx) => fd.append(`${key}[${idx}]`, item));
@@ -905,6 +935,8 @@ async function postAd(property, sessionData) {
         appendObj('step1Data', step1Data);
         appendObj('step2Data', step2Data);
         appendObj('step3Data', step3Data);
+        // Append the image file
+        fd.append('step3Data[images][0]', imageFile);
         fd.append('step', '3');
 
         const s3fd = await fetch(`${BASE}/en/add_advertise`, {
@@ -923,7 +955,7 @@ async function postAd(property, sessionData) {
         let s3fdJson = null;
         try { s3fdJson = JSON.parse(s3fdText); } catch(e) {}
         const s3fdAdd = s3fdJson?.props?.getAddAdvertiseData || {};
-        results.step3_formdata = {
+        results.step3_with_image = {
           status: s3fd.status,
           errors: s3fdJson?.props?.errors,
           isCompleted: s3fdAdd.isCompleted,
@@ -946,9 +978,9 @@ async function postAd(property, sessionData) {
       return { success: true, ...result };
     }
 
-    // Check FormData attempt
-    if (result.step3_formdata?.isCompleted) {
-      console.log(`[Mzad] Ad created via FormData for unit ${property.Unit}!`);
+    // Check FormData with image attempt
+    if (result.step3_with_image?.isCompleted) {
+      console.log(`[Mzad] Ad created via FormData+image for unit ${property.Unit}!`);
       return { success: true, ...result };
     }
 
