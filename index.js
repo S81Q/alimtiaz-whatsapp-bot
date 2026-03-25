@@ -665,8 +665,6 @@ app.get('/debug-mzad-steps', async (req, res) => {
 
     // Attempt A: Correct field names + multipart with image + agree_commission
     updateCookies(s2);
-    const { generatePlaceholderImage, objectToFormData } = require('./mzad-helpers');
-    // Use helpers from mzad.js indirectly - build FormData manually
     const FormData = require('form-data');
     const imgBuf = Buffer.from([
       0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
