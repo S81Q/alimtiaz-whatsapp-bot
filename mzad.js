@@ -104,6 +104,89 @@ async function solveRecaptchaV3(action = 'login') {
 }
 
 // ─────────────────────────────────────────────
+// Cloudflare challenge solving via Capsolver
+// ─────────────────────────────────────────────
+async function solveCloudflareChallenge(url) {
+  const apiKey = process.env.CAPSOLVER_API_KEY;
+  if (!apiKey) {
+    console.warn('[Mzad Capsolver] CAPSOLVER_API_KEY not set – cannot solve Cloudflare challenge');
+    return null;
+  }
+
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  try {
+    // First, get the challenge page HTML to extract any sitekey
+    const pageRes = await axios.get(url, {
+      headers: {
+        'Accept': 'text/html',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      },
+      validateStatus: () => true,
+    });
+
+    const html = String(pageRes.data);
+    // Check for Cloudflare Turnstile sitekey
+    const turnstileMatch = html.match(/data-sitekey="([^"]+)"/) || html.match(/sitekey['"]\s*:\s*['"]([^'"]+)/);
+    const siteKey = turnstileMatch ? turnstileMatch[1] : null;
+
+    console.log('[Mzad Capsolver] Challenge page status:', pageRes.status, '| Turnstile sitekey:', siteKey || 'not found');
+
+    // Collect cookies from the challenge page
+    const cfPageCookies = parseCookies(pageRes.headers['set-cookie']);
+    console.log('[Mzad Capsolver] Challenge page cookies:', Object.keys(cfPageCookies).join(', '));
+
+    if (siteKey) {
+      // Solve Cloudflare Turnstile via Capsolver
+      console.log('[Mzad Capsolver] Solving Cloudflare Turnstile...');
+      const createRes = await axios.post('https://api.capsolver.com/createTask', {
+        clientKey: apiKey,
+        task: {
+          type: 'AntiTurnstileTaskProxyLess',
+          websiteURL: url,
+          websiteKey: siteKey,
+        },
+      });
+
+      if (createRes.data.errorId !== 0) {
+        throw new Error('Capsolver create failed: ' + JSON.stringify(createRes.data));
+      }
+
+      const taskId = createRes.data.taskId;
+      console.log('[Mzad Capsolver] Task created:', taskId);
+
+      for (let i = 0; i < 30; i++) {
+        await delay(3000);
+        const resultRes = await axios.post('https://api.capsolver.com/getTaskResult', {
+          clientKey: apiKey,
+          taskId,
+        });
+
+        if (resultRes.data.status === 'ready') {
+          console.log('[Mzad Capsolver] Turnstile solved!');
+          return {
+            token: resultRes.data.solution.token,
+            userAgent: resultRes.data.solution.userAgent || null,
+            cookies: cfPageCookies,
+          };
+        }
+        if (resultRes.data.errorId !== 0) {
+          throw new Error('Capsolver error: ' + JSON.stringify(resultRes.data));
+        }
+      }
+      throw new Error('Capsolver: Turnstile solve timeout');
+    }
+
+    // No Turnstile sitekey found — return whatever cookies the challenge page gave us
+    console.log('[Mzad Capsolver] No Turnstile widget found. Returning challenge page cookies.');
+    return { token: null, userAgent: null, cookies: cfPageCookies };
+  } catch (e) {
+    console.error('[Mzad Capsolver] Error:', e.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────
 // Cookie utilities
 // ─────────────────────────────────────────────
 function parseCookies(setCookieHeaders) {
@@ -120,8 +203,17 @@ function parseCookies(setCookieHeaders) {
   return result;
 }
 
-function buildCookieStr(session, xsrf) {
-  return `XSRF-TOKEN=${xsrf}; mzadqatar_session=${session}; selectedCountry=QA; currentLang=en`;
+function buildCookieStr(session, xsrf, extraCookies) {
+  let str = `XSRF-TOKEN=${xsrf}; mzadqatar_session=${session}; selectedCountry=QA; currentLang=en`;
+  // Forward any extra cookies (e.g. cf_clearance, __cf_bm) for Cloudflare
+  if (extraCookies && typeof extraCookies === 'object') {
+    for (const [k, v] of Object.entries(extraCookies)) {
+      if (!['XSRF-TOKEN', 'mzadqatar_session', 'selectedCountry', 'currentLang'].includes(k) && v) {
+        str += `; ${k}=${v}`;
+      }
+    }
+  }
+  return str;
 }
 
 function decodedXsrf(xsrf) {
@@ -139,15 +231,27 @@ async function getInitialCookies() {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
     },
     withCredentials: true,
+    validateStatus: s => s < 500,
   });
 
   const cookies = parseCookies(res.headers['set-cookie']);
   const csrfMeta = String(res.data).match(/name="csrf-token"\s+content="([^"]+)"/);
 
+  // Log all cookies received (including Cloudflare ones)
+  const cookieNames = Object.keys(cookies);
+  console.log('[Mzad] Initial GET status:', res.status, '| Cookies received:', cookieNames.join(', '));
+
+  // Check if we got a Cloudflare challenge instead of the real page
+  const html = String(res.data);
+  if (html.includes('Just a moment') || html.includes('cf-challenge') || res.status === 403) {
+    console.warn('[Mzad] Initial GET returned Cloudflare challenge! Status:', res.status);
+  }
+
   return {
     session: cookies['mzadqatar_session'] || '',
     xsrf: cookies['XSRF-TOKEN'] || '',
     csrf: csrfMeta ? csrfMeta[1] : decodedXsrf(cookies['XSRF-TOKEN'] || ''),
+    allCookies: cookies,  // Preserve ALL cookies including cf_clearance, __cf_bm
   };
 }
 
@@ -185,9 +289,10 @@ async function loginWithPassword() {
 
   const phone = process.env.MZAD_PHONE || '70297066';
 
-  // Step 1: Get fresh cookies
+  // Step 1: Get fresh cookies (including Cloudflare cookies)
   const initial = await getInitialCookies();
-  let { session, xsrf, csrf } = initial;
+  let { session, xsrf, csrf, allCookies } = initial;
+  let extraCookies = { ...allCookies };
 
   // Step 2: Solve reCAPTCHA v3
   const recaptchaToken = await solveRecaptchaV3('login');
@@ -203,10 +308,11 @@ async function loginWithPassword() {
       'X-CSRF-TOKEN': csrf,
       'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true',
-      'Cookie': buildCookieStr(session, xsrf),
+      'Cookie': buildCookieStr(session, xsrf, extraCookies),
       'Origin': BASE_URL,
       'Referer': `${BASE_URL}/en/login`,
       'Accept': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
     },
     maxRedirects: 0,
     validateStatus: s => s < 500,
@@ -230,7 +336,8 @@ async function loginWithPassword() {
   console.log(`  MZAD_SESSION=${finalSession.substring(0, 40)}...`);
   console.log(`  MZAD_XSRF_TOKEN=${finalXsrf.substring(0, 40)}...`);
 
-  return { session: finalSession, xsrf: finalXsrf, csrfToken: finalCsrf };
+  Object.assign(extraCookies, resCookies);
+  return { session: finalSession, xsrf: finalXsrf, csrfToken: finalCsrf, extraCookies };
 }
 
 // ─────────────────────────────────────────────
@@ -240,9 +347,10 @@ async function loginWithOtp() {
   const { readOtpFromGmail } = require('./gmail-otp');
   const phone = process.env.MZAD_PHONE || '70297066';
 
-  // Step 1: Get fresh cookies
+  // Step 1: Get fresh cookies (including Cloudflare cookies)
   const initial = await getInitialCookies();
-  let { session, xsrf, csrf } = initial;
+  let { session, xsrf, csrf, allCookies } = initial;
+  let extraCookies = { ...allCookies };  // Track all cookies for Cloudflare bypass
 
   // Step 2: Solve reCAPTCHA v3 for OTP request
   const recaptchaToken1 = await solveRecaptchaV3('login');
@@ -251,29 +359,64 @@ async function loginWithOtp() {
 
   console.log('[Mzad] Sending OTP request to phone', phone, '...');
   console.log('[Mzad] reCAPTCHA token1:', recaptchaToken1 ? `${recaptchaToken1.substring(0, 30)}... (len=${recaptchaToken1.length})` : 'NULL (using placeholder)');
-  console.log('[Mzad] Initial cookies: session=', session ? session.substring(0, 20) + '...' : 'NONE', 'xsrf=', xsrf ? xsrf.substring(0, 20) + '...' : 'NONE');
+  console.log('[Mzad] All cookies being sent:', Object.keys(extraCookies).join(', '));
   const otpReqRes = await axios.post(`${BASE_URL}/en/login`, otpBody, {
     headers: {
       'Content-Type': 'application/json',
       'X-CSRF-TOKEN': csrf,
       'X-Requested-With': 'XMLHttpRequest',
-      'Cookie': buildCookieStr(session, xsrf),
+      'Cookie': buildCookieStr(session, xsrf, extraCookies),
       'Origin': BASE_URL,
       'Referer': `${BASE_URL}/en/login`,
       'Accept': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
     },
     validateStatus: s => s < 500,
   });
 
-  // Update cookies from response
+  // Update ALL cookies from response
   const cookies2 = parseCookies(otpReqRes.headers['set-cookie']);
+  Object.assign(extraCookies, cookies2);  // Merge new cookies
   if (cookies2['mzadqatar_session']) session = cookies2['mzadqatar_session'];
   if (cookies2['XSRF-TOKEN']) xsrf = cookies2['XSRF-TOKEN'];
   csrf = decodedXsrf(xsrf);
 
   console.log('[Mzad] OTP request status:', otpReqRes.status);
   console.log('[Mzad] OTP request response body:', JSON.stringify(otpReqRes.data).substring(0, 500));
-  console.log('[Mzad] OTP request set-cookie count:', (otpReqRes.headers['set-cookie'] || []).length);
+  console.log('[Mzad] OTP response cookies:', Object.keys(cookies2).join(', ') || 'none');
+
+  // If Cloudflare blocked us, try to solve the challenge
+  if (otpReqRes.status === 403 && String(otpReqRes.data).includes('Just a moment')) {
+    console.log('[Mzad] Cloudflare challenge detected! Attempting to solve via Capsolver...');
+    const cfResult = await solveCloudflareChallenge(`${BASE_URL}/en/login`);
+    if (cfResult) {
+      // Merge Cloudflare cookies and retry
+      Object.assign(extraCookies, cfResult.cookies);
+      console.log('[Mzad] Cloudflare solved, retrying OTP request with cf cookies...');
+      const retryRes = await axios.post(`${BASE_URL}/en/login`, otpBody, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-TOKEN': csrf,
+          'X-Requested-With': 'XMLHttpRequest',
+          'Cookie': buildCookieStr(session, xsrf, extraCookies),
+          'Origin': BASE_URL,
+          'Referer': `${BASE_URL}/en/login`,
+          'Accept': 'application/json',
+          'User-Agent': cfResult.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        },
+        validateStatus: s => s < 500,
+      });
+      const retryCookies = parseCookies(retryRes.headers['set-cookie']);
+      Object.assign(extraCookies, retryCookies);
+      if (retryCookies['mzadqatar_session']) session = retryCookies['mzadqatar_session'];
+      if (retryCookies['XSRF-TOKEN']) xsrf = retryCookies['XSRF-TOKEN'];
+      csrf = decodedXsrf(xsrf);
+      console.log('[Mzad] Retry OTP request status:', retryRes.status);
+      console.log('[Mzad] Retry response body:', JSON.stringify(retryRes.data).substring(0, 300));
+    } else {
+      console.error('[Mzad] Could not solve Cloudflare challenge');
+    }
+  }
 
   // Step 3: Wait for OTP, then read from Gmail
   console.log('[Mzad] Waiting 8s for OTP delivery...');
@@ -295,23 +438,25 @@ async function loginWithOtp() {
 
   console.log('[Mzad] Verifying OTP', otp, '...');
   console.log('[Mzad] reCAPTCHA token2:', recaptchaToken2 ? `${recaptchaToken2.substring(0, 30)}... (len=${recaptchaToken2.length})` : 'NULL (using placeholder)');
-  console.log('[Mzad] Verify cookies: session=', session ? session.substring(0, 20) + '...' : 'NONE', 'xsrf=', xsrf ? xsrf.substring(0, 20) + '...' : 'NONE');
+  console.log('[Mzad] Verify all cookies:', Object.keys(extraCookies).join(', '));
   const verifyRes = await axios.post(`${BASE_URL}/en/login`, verifyBody, {
     headers: {
       'Content-Type': 'application/json',
       'X-CSRF-TOKEN': csrf,
       'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true',
-      'Cookie': buildCookieStr(session, xsrf),
+      'Cookie': buildCookieStr(session, xsrf, extraCookies),
       'Origin': BASE_URL,
       'Referer': `${BASE_URL}/en/login`,
       'Accept': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
     },
     maxRedirects: 0,
     validateStatus: s => s < 500,
   });
 
   const finalCookies = parseCookies(verifyRes.headers['set-cookie']);
+  Object.assign(extraCookies, finalCookies);
   const finalSession = finalCookies['mzadqatar_session'] || session;
   const finalXsrf = finalCookies['XSRF-TOKEN'] || xsrf;
   const finalCsrf = decodedXsrf(finalXsrf);
@@ -335,7 +480,7 @@ async function loginWithOtp() {
   console.log(`  MZAD_SESSION=${finalSession.substring(0, 40)}...`);
   console.log(`  MZAD_XSRF_TOKEN=${finalXsrf.substring(0, 40)}...`);
 
-  return { session: finalSession, xsrf: finalXsrf, csrfToken: finalCsrf };
+  return { session: finalSession, xsrf: finalXsrf, csrfToken: finalCsrf, extraCookies };
 }
 
 // ─────────────────────────────────────────────
@@ -349,7 +494,7 @@ async function getSession() {
     const valid = await isSessionValid(session, xsrf);
     if (valid) {
       console.log('[Mzad] Stored session is valid');
-      return { session, xsrf, csrfToken: decodedXsrf(xsrf) };
+      return { session, xsrf, csrfToken: decodedXsrf(xsrf), extraCookies: {} };
     }
     console.log('[Mzad] Stored session expired, re-logging in...');
   } else {
@@ -470,7 +615,7 @@ function objectToFormData(obj, form, parentKey) {
  * @returns {Object} Inertia response data
  */
 async function postAd(property, sessionData) {
-  const { session, xsrf, csrfToken } = sessionData;
+  const { session, xsrf, csrfToken, extraCookies } = sessionData;
   const isComm = isCommercialType(property.Type);
 
   // Get Inertia version for headers
@@ -543,9 +688,10 @@ async function postAd(property, sessionData) {
     'X-Inertia': 'true',
     'X-Inertia-Version': inertiaVersion,
     'X-XSRF-TOKEN': csrfToken,
-    'Cookie': buildCookieStr(session, xsrf),
+    'Cookie': buildCookieStr(session, xsrf, extraCookies),
     'Origin': BASE_URL,
     'Referer': `${BASE_URL}/en/add_advertise`,
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html, application/xhtml+xml',
   };
 
@@ -561,10 +707,11 @@ async function postAd(property, sessionData) {
   // Update cookies if server sends new ones
   const cookies1 = parseCookies(step1Res.headers['set-cookie']);
   if (cookies1['XSRF-TOKEN']) commonHeaders['X-XSRF-TOKEN'] = decodedXsrf(cookies1['XSRF-TOKEN']);
-  if (cookies1['mzadqatar_session']) {
+  if (cookies1['mzadqatar_session'] || cookies1['XSRF-TOKEN']) {
     commonHeaders['Cookie'] = buildCookieStr(
       cookies1['mzadqatar_session'] || session,
-      cookies1['XSRF-TOKEN'] || xsrf
+      cookies1['XSRF-TOKEN'] || xsrf,
+      extraCookies
     );
   }
 
@@ -581,10 +728,11 @@ async function postAd(property, sessionData) {
 
   const cookies2 = parseCookies(step2Res.headers['set-cookie']);
   if (cookies2['XSRF-TOKEN']) commonHeaders['X-XSRF-TOKEN'] = decodedXsrf(cookies2['XSRF-TOKEN']);
-  if (cookies2['mzadqatar_session']) {
+  if (cookies2['mzadqatar_session'] || cookies2['XSRF-TOKEN']) {
     commonHeaders['Cookie'] = buildCookieStr(
       cookies2['mzadqatar_session'] || session,
-      cookies2['XSRF-TOKEN'] || xsrf
+      cookies2['XSRF-TOKEN'] || xsrf,
+      extraCookies
     );
   }
 
