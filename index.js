@@ -536,6 +536,174 @@ app.get('/test-mzad-login', async (req, res) => {
   }
 });
 
+// Debug Mzad step-by-step to diagnose step 3 failure
+app.get('/debug-mzad-steps', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const session = await mzad.getSession();
+    if (!session) return res.status(500).json({ error: 'No session' });
+
+    const axios = require('axios');
+    const BASE_URL = 'https://mzadqatar.com';
+    const { session: sess, xsrf, csrfToken, extraCookies } = session;
+
+    // Build cookie string
+    const cookies = [`mzadqatar_session=${sess}`, `XSRF-TOKEN=${xsrf}`];
+    if (extraCookies) {
+      for (const [k, v] of Object.entries(extraCookies)) {
+        cookies.push(`${k}=${v}`);
+      }
+    }
+
+    const decodedXsrf = decodeURIComponent(csrfToken || xsrf);
+
+    // Get Inertia version
+    let inertiaVersion = '';
+    try {
+      const pageRes = await axios.get(`${BASE_URL}/en/add_advertise`, {
+        headers: {
+          'Cookie': cookies.join('; '),
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        },
+        validateStatus: s => s < 500,
+      });
+      const match = typeof pageRes.data === 'string' && pageRes.data.match(/version&quot;:&quot;([^&]+)&quot;/);
+      if (match) inertiaVersion = match[1];
+    } catch (e) {}
+
+    const commonHeaders = {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-Inertia': 'true',
+      'X-Inertia-Version': inertiaVersion,
+      'X-XSRF-TOKEN': decodedXsrf,
+      'Cookie': cookies.join('; '),
+      'Origin': BASE_URL,
+      'Referer': `${BASE_URL}/en/add_advertise`,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html, application/xhtml+xml',
+    };
+
+    const step1Data = { categoryId: 8494, lang: 'en', mzadyUserNumber: null };
+    const step2Data = {
+      cityId: 3, regionId: '30', numberOfRooms: 2, location: '',
+      categoryAdvertiseTypeId: '3', furnishedTypeId: 107,
+      properterylevel: 346, lands_area: 100, properteryfinishing: 366,
+      properterybathrooms: 358, salesref: 'DEBUG-1', rentaltype: 791,
+      subCategoryId: 88,
+    };
+
+    // Step 1
+    const s1 = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+
+    // Update cookies from step 1
+    const sc1 = s1.headers['set-cookie'] || [];
+    for (const c of sc1) {
+      const m = c.match(/XSRF-TOKEN=([^;]+)/);
+      if (m) commonHeaders['X-XSRF-TOKEN'] = decodeURIComponent(m[1]);
+      const m2 = c.match(/mzadqatar_session=([^;]+)/);
+      if (m2) { /* update session cookie in header */ }
+    }
+    // Rebuild cookie from set-cookie
+    const newCookies = [...cookies];
+    for (const c of sc1) {
+      const parts = c.split(';')[0].split('=');
+      if (parts[0] === 'XSRF-TOKEN' || parts[0] === 'mzadqatar_session') {
+        const idx = newCookies.findIndex(ck => ck.startsWith(parts[0] + '='));
+        if (idx >= 0) newCookies[idx] = c.split(';')[0];
+        else newCookies.push(c.split(';')[0]);
+      }
+    }
+    commonHeaders['Cookie'] = newCookies.join('; ');
+
+    // Step 2
+    const s2 = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+
+    // Update cookies from step 2
+    const sc2 = s2.headers['set-cookie'] || [];
+    for (const c of sc2) {
+      const m = c.match(/XSRF-TOKEN=([^;]+)/);
+      if (m) commonHeaders['X-XSRF-TOKEN'] = decodeURIComponent(m[1]);
+      const parts = c.split(';')[0].split('=');
+      if (parts[0] === 'XSRF-TOKEN' || parts[0] === 'mzadqatar_session') {
+        const idx = newCookies.findIndex(ck => ck.startsWith(parts[0] + '='));
+        if (idx >= 0) newCookies[idx] = c.split(';')[0];
+        else newCookies.push(c.split(';')[0]);
+      }
+    }
+    commonHeaders['Cookie'] = newCookies.join('; ');
+
+    // Get full step 2 response props
+    const s2Props = s2.data?.props || {};
+    const s2PropsKeys = Object.keys(s2Props);
+
+    // Step 3 attempt - minimal JSON
+    const step3Data = {
+      title: 'Apartment For Rent Doha',
+      description: 'Nice apartment for rent in Doha Qatar. 2 bedrooms, fully finished. Contact us for viewing.',
+      price: 5000,
+      autoRenew: false,
+      currencyId: 1,
+      isResetImages: false,
+      images: [],
+    };
+
+    const s3 = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data, step: 3,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+
+    // Update cookies and try with acceptTerms if first attempt failed
+    let s3b = null;
+    if (s3.status >= 400) {
+      const sc3 = s3.headers['set-cookie'] || [];
+      for (const c of sc3) {
+        const m = c.match(/XSRF-TOKEN=([^;]+)/);
+        if (m) commonHeaders['X-XSRF-TOKEN'] = decodeURIComponent(m[1]);
+        const parts = c.split(';')[0].split('=');
+        if (parts[0] === 'XSRF-TOKEN' || parts[0] === 'mzadqatar_session') {
+          const idx = newCookies.findIndex(ck => ck.startsWith(parts[0] + '='));
+          if (idx >= 0) newCookies[idx] = c.split(';')[0];
+          else newCookies.push(c.split(';')[0]);
+        }
+      }
+      commonHeaders['Cookie'] = newCookies.join('; ');
+
+      // Try with acceptTerms and title/description in step2Data
+      const step2DataV2 = { ...step2Data, title: 'Apartment For Rent Doha', description: 'Nice apartment for rent in Doha. 2BR. Contact us.' };
+      const step3DataV2 = { price: 5000, autoRenew: false, currencyId: 1, isResetImages: false, images: [], acceptTerms: true };
+
+      s3b = await axios.post(`${BASE_URL}/en/add_advertise`, {
+        step1Data, step2Data: step2DataV2, step3Data: step3DataV2, step: 3,
+      }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    }
+
+    const s3Data = typeof s3.data === 'string' ? s3.data.substring(0, 1000) : s3.data;
+    const s3bData = s3b ? (typeof s3b.data === 'string' ? s3b.data.substring(0, 1000) : s3b.data) : null;
+
+    res.json({
+      step1: { status: s1.status },
+      step2: {
+        status: s2.status,
+        propsKeys: s2PropsKeys,
+        errors: s2Props.errors,
+        getAddAdvertiseData: s2Props.getAddAdvertiseData ? {
+          keys: Object.keys(s2Props.getAddAdvertiseData),
+          prevData: s2Props.getAddAdvertiseData.prevData,
+          isCompleted: s2Props.getAddAdvertiseData.isCompleted,
+        } : null,
+      },
+      step3_attempt1: { status: s3.status, data: s3Data },
+      step3_attempt2: s3b ? { status: s3b.status, data: s3bData } : 'skipped',
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
