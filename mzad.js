@@ -240,9 +240,44 @@ function decodedXsrf(xsrf) {
 async function getInitialCookies() {
   console.log('[Mzad] Fetching initial cookies from login page...');
 
-  // First try: get CF clearance via Puppeteer (proactive bypass)
+  const defaultUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+  // Try direct axios first (no Puppeteer) — Railway IP may not be CF-challenged
+  try {
+    const directRes = await mzadAxios.get(`${BASE_URL}/en/login`, {
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'User-Agent': defaultUa,
+      },
+      maxRedirects: 5,
+      validateStatus: s => s < 500,
+    });
+
+    const html = String(directRes.data);
+    const isCfChallenge = html.includes('Just a moment') || html.includes('cf-challenge') || directRes.status === 403;
+
+    if (!isCfChallenge) {
+      // Direct access works — no Puppeteer needed!
+      const cookies = parseCookies(directRes.headers['set-cookie']);
+      const csrfMeta = html.match(/name="csrf-token"\s+content="([^"]+)"/);
+      console.log('[Mzad] Direct GET successful! status:', directRes.status, '| Cookies:', Object.keys(cookies).join(', '));
+
+      return {
+        session: cookies['mzadqatar_session'] || '',
+        xsrf: cookies['XSRF-TOKEN'] || '',
+        csrf: csrfMeta ? csrfMeta[1] : decodedXsrf(cookies['XSRF-TOKEN'] || ''),
+        allCookies: cookies,
+        cfUserAgent: defaultUa,
+      };
+    }
+    console.log('[Mzad] Direct GET blocked by Cloudflare, falling back to Puppeteer...');
+  } catch (e) {
+    console.log('[Mzad] Direct GET failed:', e.message, '— falling back to Puppeteer...');
+  }
+
+  // Fallback: use Puppeteer CF bypass
   const cfData = await getCfClearance(`${BASE_URL}/en/login`);
-  const cfUserAgent = cfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+  const cfUserAgent = cfData?.userAgent || defaultUa;
   const cfCookieStr = cfData?.cookies
     ? Object.entries(cfData.cookies).map(([k, v]) => `${k}=${v}`).join('; ')
     : '';
@@ -259,16 +294,8 @@ async function getInitialCookies() {
 
   const cookies = parseCookies(res.headers['set-cookie']);
   const csrfMeta = String(res.data).match(/name="csrf-token"\s+content="([^"]+)"/);
-
-  // Merge CF cookies with response cookies
   const allCookies = { ...(cfData?.cookies || {}), ...cookies };
-  const cookieNames = Object.keys(allCookies);
-  console.log('[Mzad] Initial GET status:', res.status, '| Cookies received:', cookieNames.join(', '));
-
-  const html = String(res.data);
-  if (html.includes('Just a moment') || html.includes('cf-challenge') || res.status === 403) {
-    console.warn('[Mzad] Initial GET STILL returned Cloudflare challenge after Puppeteer bypass! Status:', res.status);
-  }
+  console.log('[Mzad] Puppeteer GET status:', res.status, '| Cookies:', Object.keys(allCookies).join(', '));
 
   return {
     session: cookies['mzadqatar_session'] || allCookies['mzadqatar_session'] || '',
