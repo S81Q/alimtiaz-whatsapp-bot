@@ -729,9 +729,18 @@ async function postAd(property, sessionData) {
 
   console.log(`[Mzad] postAd for unit ${property.Unit} (lang=${step1Data.lang})...`);
 
+  // Ensure CF clearance is available (getSession may skip this if stored session is valid)
+  if (!cachedCfData) {
+    console.log(`[Mzad] No CF clearance cached — getting it now...`);
+    await getCfClearance(`${BASE_URL}/en/add_advertise`);
+  }
+
   const cfExtra = cachedCfData?.cookies || {};
   const ua = cachedCfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
   const allExtra = { ...cfExtra, ...(extraCookies || {}) };
+
+  console.log(`[Mzad] CF cookies: ${Object.keys(cfExtra).join(', ') || 'none'}`);
+  console.log(`[Mzad] Extra cookies: ${Object.keys(extraCookies || {}).join(', ') || 'none'}`);
 
   // Get the Inertia version from the page
   const version = await getInertiaVersion(session, xsrf);
