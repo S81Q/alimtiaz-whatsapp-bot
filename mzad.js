@@ -155,7 +155,7 @@ async function getInitialCookies() {
 // Check if current session is still valid
 // ─────────────────────────────────────────────
 async function isSessionValid(session, xsrf) {
-  if (!session || !xsrf) return false;
+  if (!session || !xsrf) { console.log('[Mzad] isSessionValid: missing session or xsrf'); return false; }
   try {
     const res = await axios.get(`${BASE_URL}/en/add_advertise`, {
       headers: {
@@ -168,8 +168,10 @@ async function isSessionValid(session, xsrf) {
       maxRedirects: 0,
       validateStatus: s => s < 500,
     });
+    console.log('[Mzad] isSessionValid: status=', res.status, 'valid=', res.status === 200 || res.status === 409);
     return res.status === 200 || res.status === 409;
-  } catch {
+  } catch (e) {
+    console.log('[Mzad] isSessionValid: error=', e.message);
     return false;
   }
 }
@@ -248,6 +250,8 @@ async function loginWithOtp() {
   const otpBody = { phone, recaptchaToken: recaptchaToken1 || 'placeholder-token' };
 
   console.log('[Mzad] Sending OTP request to phone', phone, '...');
+  console.log('[Mzad] reCAPTCHA token1:', recaptchaToken1 ? `${recaptchaToken1.substring(0, 30)}... (len=${recaptchaToken1.length})` : 'NULL (using placeholder)');
+  console.log('[Mzad] Initial cookies: session=', session ? session.substring(0, 20) + '...' : 'NONE', 'xsrf=', xsrf ? xsrf.substring(0, 20) + '...' : 'NONE');
   const otpReqRes = await axios.post(`${BASE_URL}/en/login`, otpBody, {
     headers: {
       'Content-Type': 'application/json',
@@ -268,6 +272,8 @@ async function loginWithOtp() {
   csrf = decodedXsrf(xsrf);
 
   console.log('[Mzad] OTP request status:', otpReqRes.status);
+  console.log('[Mzad] OTP request response body:', JSON.stringify(otpReqRes.data).substring(0, 500));
+  console.log('[Mzad] OTP request set-cookie count:', (otpReqRes.headers['set-cookie'] || []).length);
 
   // Step 3: Wait for OTP, then read from Gmail
   console.log('[Mzad] Waiting 8s for OTP delivery...');
@@ -288,6 +294,8 @@ async function loginWithOtp() {
   };
 
   console.log('[Mzad] Verifying OTP', otp, '...');
+  console.log('[Mzad] reCAPTCHA token2:', recaptchaToken2 ? `${recaptchaToken2.substring(0, 30)}... (len=${recaptchaToken2.length})` : 'NULL (using placeholder)');
+  console.log('[Mzad] Verify cookies: session=', session ? session.substring(0, 20) + '...' : 'NONE', 'xsrf=', xsrf ? xsrf.substring(0, 20) + '...' : 'NONE');
   const verifyRes = await axios.post(`${BASE_URL}/en/login`, verifyBody, {
     headers: {
       'Content-Type': 'application/json',
@@ -309,6 +317,10 @@ async function loginWithOtp() {
   const finalCsrf = decodedXsrf(finalXsrf);
 
   console.log('[Mzad] OTP verify status:', verifyRes.status);
+  console.log('[Mzad] OTP verify response body:', JSON.stringify(verifyRes.data).substring(0, 500));
+  console.log('[Mzad] OTP verify set-cookie count:', (verifyRes.headers['set-cookie'] || []).length);
+  console.log('[Mzad] Final session changed?', finalSession !== session);
+  console.log('[Mzad] Final xsrf changed?', finalXsrf !== xsrf);
 
   // Validate the session actually works
   const valid = await isSessionValid(finalSession, finalXsrf);
