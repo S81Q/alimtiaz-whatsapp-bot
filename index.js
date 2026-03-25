@@ -734,22 +734,33 @@ app.get('/check-my-ads', async (req, res) => {
     }
 
     const headers = {
-      'X-Requested-With': 'XMLHttpRequest',
-      'X-Inertia': 'true',
-      'X-Inertia-Version': '',
       'Cookie': cookies.join('; '),
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'text/html, application/xhtml+xml',
     };
 
+    // First get the page HTML to extract Inertia data
     const r = await axios.get('https://mzadqatar.com/en/user/profile/myads', {
       headers,
       validateStatus: s => s < 600,
     });
 
-    const props = r.data?.props || {};
+    // Parse Inertia props from HTML
+    let props = {};
+    if (typeof r.data === 'string') {
+      const match = r.data.match(/data-page="([^"]+)"/);
+      if (match) {
+        try {
+          const pageData = JSON.parse(match[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+          props = pageData.props || {};
+        } catch(e) {}
+      }
+    } else {
+      props = r.data?.props || {};
+    }
+
     const userData = props.classifiedUserData;
-    const myAds = props.myProductsData;
+    const myAds = props.myProductsData || props.myAds;
 
     res.json({
       status: r.status,
