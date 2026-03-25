@@ -540,6 +540,12 @@ app.get('/test-mzad-login', async (req, res) => {
 app.get('/debug-mzad-steps', async (req, res) => {
   try {
     const mzad = require('./mzad');
+    // Force fresh login if ?fresh=1
+    if (req.query.fresh === '1') {
+      console.log('[debug-mzad] Forcing fresh login...');
+      delete process.env.MZAD_SESSION;
+      delete process.env.MZAD_XSRF_TOKEN;
+    }
     console.log('[debug-mzad] Getting session...');
     const session = await mzad.getSession();
     if (!session) return res.status(500).json({ error: 'No session' });

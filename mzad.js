@@ -299,8 +299,16 @@ async function isSessionValid(session, xsrf) {
       maxRedirects: 0,
       validateStatus: s => s < 500,
     });
-    console.log('[Mzad] isSessionValid: status=', res.status, 'valid=', res.status === 200 || res.status === 409);
-    return res.status === 200 || res.status === 409;
+    // 200 = valid, 409 = Inertia version mismatch (still authenticated)
+    // 302 = redirect to login (not authenticated)
+    const valid = res.status === 200 || res.status === 409;
+    // Extra check: if 302, check redirect location
+    if (res.status === 302) {
+      const location = res.headers['location'] || '';
+      console.log('[Mzad] isSessionValid: status=302, redirect to:', location);
+    }
+    console.log('[Mzad] isSessionValid: status=', res.status, 'valid=', valid);
+    return valid;
   } catch (e) {
     console.log('[Mzad] isSessionValid: error=', e.message);
     return false;
