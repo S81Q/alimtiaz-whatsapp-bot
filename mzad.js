@@ -746,6 +746,7 @@ async function postAd(property, sessionData) {
     const csrfVal = decodedXsrf(currentXsrf);
 
     try {
+      // POST the step data — Inertia returns 302 redirect on success
       const res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, stepData, {
         headers: {
           'Content-Type': 'application/json',
@@ -763,18 +764,57 @@ async function postAd(property, sessionData) {
         validateStatus: s => s < 500,
       });
 
-      // Update cookies from response
+      // Update cookies from POST response
       const resCookies = parseCookies(res.headers['set-cookie']);
       if (resCookies['mzadqatar_session']) currentSession = resCookies['mzadqatar_session'];
       if (resCookies['XSRF-TOKEN']) currentXsrf = resCookies['XSRF-TOKEN'];
       Object.assign(allExtra, resCookies);
 
-      // Parse Inertia response
+      console.log(`[Mzad] Step ${stepNum} POST status: ${res.status}`);
+
+      // If 302 redirect, follow it with GET + Inertia headers to get the page data
       let json = null;
-      if (typeof res.data === 'object') {
-        json = res.data;
+      if (res.status === 302 || res.status === 303) {
+        const redirectUrl = res.headers['location'] || `${BASE_URL}/en/add_advertise`;
+        const fullUrl = redirectUrl.startsWith('http') ? redirectUrl : `${BASE_URL}${redirectUrl}`;
+        console.log(`[Mzad] Step ${stepNum} following redirect to: ${fullUrl}`);
+
+        const followCookieStr = buildCookieStr(currentSession, currentXsrf, allExtra);
+        const followCsrf = decodedXsrf(currentXsrf);
+        const followRes = await mzadAxios.get(fullUrl, {
+          headers: {
+            'Accept': 'text/html, application/xhtml+xml',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-Inertia': 'true',
+            'X-Inertia-Version': version,
+            'X-XSRF-TOKEN': followCsrf,
+            'Cookie': followCookieStr,
+            'Referer': `${BASE_URL}/en/add_advertise`,
+            'User-Agent': ua,
+          },
+          maxRedirects: 5,
+          validateStatus: s => s < 500,
+        });
+
+        // Update cookies from GET response
+        const followCookies = parseCookies(followRes.headers['set-cookie']);
+        if (followCookies['mzadqatar_session']) currentSession = followCookies['mzadqatar_session'];
+        if (followCookies['XSRF-TOKEN']) currentXsrf = followCookies['XSRF-TOKEN'];
+        Object.assign(allExtra, followCookies);
+
+        if (typeof followRes.data === 'object') {
+          json = followRes.data;
+        } else {
+          try { json = JSON.parse(String(followRes.data)); } catch(e) {}
+        }
+        console.log(`[Mzad] Step ${stepNum} GET status: ${followRes.status}, isInertia: ${!!json?.component}`);
       } else {
-        try { json = JSON.parse(String(res.data)); } catch(e) {}
+        // Direct response (no redirect)
+        if (typeof res.data === 'object') {
+          json = res.data;
+        } else {
+          try { json = JSON.parse(String(res.data)); } catch(e) {}
+        }
       }
 
       const result = {
