@@ -791,59 +791,64 @@ async function postAd(property, sessionData) {
   }
 
   console.log(`[Mzad] Step 2 status: ${step2Res.status}`);
+  // Log step2 response to understand server expectations for step3
+  const step2Body = typeof step2Res.data === 'string' ? step2Res.data.substring(0, 300) : JSON.stringify(step2Res.data)?.substring(0, 500);
+  console.log(`[Mzad] Step 2 response:`, step2Body);
 
   // Check for validation errors
   if (step2Res.data?.props?.errors && Object.keys(step2Res.data.props.errors).length > 0) {
     throw new Error('Mzad step 2 validation: ' + JSON.stringify(step2Res.data.props.errors));
   }
 
-  // ── Step 3: Submit ad content and publish (multipart with image) ──
-  console.log(`[Mzad] Step 3: Publishing ad for unit ${property.Unit} (multipart with image)...`);
+  // ── Step 3: Submit ad content and publish ──
+  console.log(`[Mzad] Step 3: Publishing ad for unit ${property.Unit}...`);
+  console.log(`[Mzad] Step 3 data:`, JSON.stringify({ step1Data, step2Data, step3Data, step: 3 }).substring(0, 500));
 
-  // Generate placeholder image
-  const imageBuffer = generatePlaceholderImage();
+  // Try Step 3 as JSON first (simpler, no image upload complexity)
+  console.log(`[Mzad] Step 3: Attempting JSON submission...`);
+  const step3Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
+    step1Data, step2Data, step3Data, step: 3,
+  }, { headers: commonHeaders, validateStatus: s => s < 600 });
 
-  // Add image to step3Data
-  step3Data.images = [imageBuffer];
+  console.log(`[Mzad] Step 3 JSON status: ${step3Res.status}`);
+  const respSnippet = typeof step3Res.data === 'string' ? step3Res.data.substring(0, 800) : JSON.stringify(step3Res.data)?.substring(0, 800);
+  console.log(`[Mzad] Step 3 response:`, respSnippet);
 
-  // Build FormData with Inertia-style bracket notation
-  const formPayload = { step1Data, step2Data, step3Data, step: 3 };
-  const fd = objectToFormData(formPayload);
+  // If JSON step 3 returned 500, try multipart with image as fallback
+  if (step3Res.status >= 500) {
+    console.log(`[Mzad] Step 3 JSON failed (${step3Res.status}), trying multipart with image...`);
+    const imageBuffer = generatePlaceholderImage();
+    step3Data.images = [imageBuffer];
+    const formPayload = { step1Data, step2Data, step3Data, step: 3 };
+    const fd = objectToFormData(formPayload);
 
-  // Step 3 headers: multipart (let form-data set Content-Type with boundary)
-  const step3Headers = { ...commonHeaders };
-  delete step3Headers['Content-Type']; // form-data sets its own
-  Object.assign(step3Headers, fd.getHeaders());
+    const step3Headers = { ...commonHeaders };
+    delete step3Headers['Content-Type'];
+    Object.assign(step3Headers, fd.getHeaders());
 
-  const step3Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, fd, {
-    headers: step3Headers,
-    validateStatus: s => s < 600,
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
-  });
+    const step3MpRes = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, fd, {
+      headers: step3Headers,
+      validateStatus: s => s < 600,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
 
-  console.log(`[Mzad] Ad submitted for unit ${property.Unit}. Status: ${step3Res.status}`);
-  if (step3Res.status >= 400) {
-    const respSnippet = typeof step3Res.data === 'string' ? step3Res.data.substring(0, 500) : JSON.stringify(step3Res.data)?.substring(0, 500);
-    console.log(`[Mzad] Step 3 response body:`, respSnippet);
+    console.log(`[Mzad] Step 3 multipart status: ${step3MpRes.status}`);
+    const mpSnippet = typeof step3MpRes.data === 'string' ? step3MpRes.data.substring(0, 800) : JSON.stringify(step3MpRes.data)?.substring(0, 800);
+    console.log(`[Mzad] Step 3 multipart response:`, mpSnippet);
+
+    if (step3MpRes.status >= 500) {
+      throw new Error(`Mzad step 3 failed: JSON=${step3Res.status}, multipart=${step3MpRes.status}`);
+    }
+    if (step3MpRes.data?.props?.errors && Object.keys(step3MpRes.data.props.errors).length > 0) {
+      throw new Error('Mzad step 3 validation: ' + JSON.stringify(step3MpRes.data.props.errors));
+    }
+    return step3MpRes.data;
   }
 
-  // If step 3 returns 500 with multipart, retry with JSON (no image) as fallback
+  // Check for 4xx errors
   if (step3Res.status >= 400) {
-    console.log(`[Mzad] Step 3 multipart failed (${step3Res.status}), retrying with JSON...`);
-    delete step3Data.images;
-    const step3JsonRes = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data, step: 3,
-    }, { headers: { ...commonHeaders, 'Content-Type': 'application/json' }, validateStatus: s => s < 600 });
-
-    console.log(`[Mzad] Step 3 JSON fallback status: ${step3JsonRes.status}`);
-    const fallbackSnippet = typeof step3JsonRes.data === 'string' ? step3JsonRes.data.substring(0, 500) : JSON.stringify(step3JsonRes.data)?.substring(0, 500);
-    console.log(`[Mzad] Step 3 JSON fallback body:`, fallbackSnippet);
-
-    if (step3JsonRes.data?.props?.errors && Object.keys(step3JsonRes.data.props.errors).length > 0) {
-      throw new Error('Mzad step 3 validation: ' + JSON.stringify(step3JsonRes.data.props.errors));
-    }
-    return step3JsonRes.data;
+    throw new Error(`Mzad step 3 error: status ${step3Res.status}`);
   }
 
   // Check for validation errors
