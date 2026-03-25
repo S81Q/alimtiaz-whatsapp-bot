@@ -643,55 +643,26 @@ function objectToFormData(obj, form, parentKey) {
 // Ad content builders — imported from ad-builders.js
 
 // ─────────────────────────────────────────────
-// Main post function (Inertia JSON format)
+// Build form data for a property
 // ─────────────────────────────────────────────
-/**
- * Post a property ad on Mzad Qatar.
- *
- * mzadqatar.com form submission format (reverse-engineered):
- *   POST /en/add_advertise
- *   Content-Type: application/json
- *   Headers: X-Inertia, X-Inertia-Version, X-Requested-With, X-XSRF-TOKEN
- *   Body: { step1Data, step2Data, step3Data, step }
- *
- * Multi-step: step=1 validates step1, step=2 validates step2, step=3 submits the ad
- *
- * @param {Object} property  – Property row from Google Sheets
- * @param {Object} sessionData – { session, xsrf, csrfToken }
- * @returns {Object} Inertia response data
- */
-async function postAd(property, sessionData) {
-  const { session, xsrf, csrfToken, extraCookies } = sessionData;
+function buildFormData(property) {
   const isComm = isCommercialType(property.Type);
+  const categoryId = isComm ? 14897 : 8494;
 
-  // Get Inertia version for headers
-  const inertiaVersion = await getInertiaVersion(session, xsrf);
+  const step1Data = { categoryId, lang: 'en', mzadyUserNumber: null };
 
-  // Determine category ID
-  const categoryId = isComm ? 14897 : 8494; // Commercial=14897, Residential=8494
-
-  // Build step data using correct mzadqatar.com field IDs
-  const step1Data = {
-    categoryId,
-    lang: 'en',
-    mzadyUserNumber: null,
-  };
-
-  // Map property fields to mzadqatar.com dropdown value IDs
   const bedrooms = parseInt(property.Bedrooms) || 2;
   const bathrooms = String(parseInt(property.Bathrooms) || 2);
   const area = parseInt(property.Size_sqm) || 100;
   const floor = String(parseInt(property.Floor) || 1);
-  const price = parseInt(property.Rent_QAR) || 1000; // Default to 1000 QAR if not set
+  const price = parseInt(property.Rent_QAR) || 1000;
 
-  // Determine subcategory based on property type
-  let subCategoryId = MZAD_VALUES.subcategory['Apartments']; // Default
+  let subCategoryId = MZAD_VALUES.subcategory['Apartments'];
   const typeLower = (property.Type || '').toLowerCase();
   if (typeLower.includes('villa')) subCategoryId = MZAD_VALUES.subcategory['Villas'];
   else if (typeLower.includes('building') || typeLower.includes('tower')) subCategoryId = MZAD_VALUES.subcategory['Building & Towers'];
 
-  // Map region name to ID (default D-Ring)
-  let regionId = '30'; // D-Ring default
+  let regionId = '30';
   if (property.Region) {
     const regionEntry = Object.entries(MZAD_VALUES.regions).find(([name]) =>
       property.Region.toLowerCase().includes(name.toLowerCase()));
@@ -699,18 +670,18 @@ async function postAd(property, sessionData) {
   }
 
   const step2Data = {
-    cityId: MZAD_VALUES.cities['Doha'],                  // 3
+    cityId: MZAD_VALUES.cities['Doha'],
     regionId,
     numberOfRooms: bedrooms,
     location: property.Maps_Link || '',
-    categoryAdvertiseTypeId: MZAD_VALUES.adType['Rent'],  // '3'
-    furnishedTypeId: MZAD_VALUES.furnishing['Not Furnished'], // 107
+    categoryAdvertiseTypeId: MZAD_VALUES.adType['Rent'],
+    furnishedTypeId: MZAD_VALUES.furnishing['Not Furnished'],
     properterylevel: MZAD_VALUES.levels[floor] || MZAD_VALUES.levels['1'],
     lands_area: area,
-    properteryfinishing: MZAD_VALUES.finishing['Fully Finished'], // 366
+    properteryfinishing: MZAD_VALUES.finishing['Fully Finished'],
     properterybathrooms: MZAD_VALUES.bathrooms[bathrooms] || MZAD_VALUES.bathrooms['2'],
     salesref: property.Unit || '',
-    rentaltype: MZAD_VALUES.rentalType['Monthly'],        // 791
+    rentaltype: MZAD_VALUES.rentalType['Monthly'],
     subCategoryId,
   };
 
@@ -718,141 +689,284 @@ async function postAd(property, sessionData) {
   const titleEn = buildTitleEn(property);
   const titleAr = buildTitleAr(property);
 
-  // Mzad uses productName fields (max ~100 chars)
   const productNameEnglish = titleEn.substring(0, 100);
   const productNameArabic = titleAr.substring(0, 100);
 
-  // Clean description - remove emojis and box-drawing chars
   const safeDesc = desc
-    .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')  // Remove emojis
-    .replace(/[━─═╔╗╚╝║│┌┐└┘├┤┬┴┼]/g, '-')  // Replace box-drawing
-    .replace(/\n{3,}/g, '\n\n')               // Normalize newlines
+    .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
+    .replace(/[━─═╔╗╚╝║│┌┐└┘├┤┬┴┼]/g, '-')
+    .replace(/\n{3,}/g, '\n\n')
     .substring(0, 1500);
 
-  // Mzad uses productDescription* and productName* fields (NOT title/description/price)
   const step3Data = {
     productNameEnglish,
     productNameArabic,
-    productNameArEn: productNameEnglish,       // Bilingual fallback
+    productNameArEn: productNameEnglish,
     productDescriptionEnglish: safeDesc,
     productDescriptionArabic: safeDesc,
-    productDescriptionArEn: safeDesc,          // Bilingual fallback
+    productDescriptionArEn: safeDesc,
     productPrice: price,
     autoRenew: false,
-    currencyId: 1,  // QAR
+    currencyId: 1,
     isResetImages: false,
     images: [],
     productId: null,
     agree_commission: true,
   };
 
-  // Use CF user-agent if available from cached clearance
-  const ua = cachedCfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
-
-  // Merge any cached CF cookies into extraCookies
-  if (cachedCfData?.cookies) {
-    Object.assign(extraCookies, cachedCfData.cookies);
-  }
-
-  const commonHeaders = {
-    'Content-Type': 'application/json',
-    'X-Requested-With': 'XMLHttpRequest',
-    'X-Inertia': 'true',
-    'X-Inertia-Version': inertiaVersion,
-    'X-XSRF-TOKEN': csrfToken,
-    'Cookie': buildCookieStr(session, xsrf, extraCookies),
-    'Origin': BASE_URL,
-    'Referer': `${BASE_URL}/en/add_advertise`,
-    'User-Agent': ua,
-    'Accept': 'text/html, application/xhtml+xml',
-  };
-
-  // ── Step 1: Submit category selection ──
-  console.log(`[Mzad] Step 1: Submitting category ${categoryId} for unit ${property.Unit}...`);
-  const step1Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
-    step1Data,
-    step2Data: {},
-    step3Data: { autoRenew: false, currencyId: 1, isResetImages: false },
-    step: 1,
-  }, { headers: commonHeaders, validateStatus: s => s < 500 });
-
-  // Update cookies if server sends new ones
-  const cookies1 = parseCookies(step1Res.headers['set-cookie']);
-  if (cookies1['XSRF-TOKEN']) commonHeaders['X-XSRF-TOKEN'] = decodedXsrf(cookies1['XSRF-TOKEN']);
-  if (cookies1['mzadqatar_session'] || cookies1['XSRF-TOKEN']) {
-    commonHeaders['Cookie'] = buildCookieStr(
-      cookies1['mzadqatar_session'] || session,
-      cookies1['XSRF-TOKEN'] || xsrf,
-      extraCookies
-    );
-  }
-
-  console.log(`[Mzad] Step 1 status: ${step1Res.status}`);
-
-  // ── Step 2: Submit property details ──
-  console.log(`[Mzad] Step 2: Submitting property details for unit ${property.Unit}...`);
-  const step2Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
-    step1Data,
-    step2Data,
-    step3Data: { autoRenew: false, currencyId: 1, isResetImages: false },
-    step: 2,
-  }, { headers: commonHeaders, validateStatus: s => s < 500 });
-
-  const cookies2 = parseCookies(step2Res.headers['set-cookie']);
-  if (cookies2['XSRF-TOKEN']) commonHeaders['X-XSRF-TOKEN'] = decodedXsrf(cookies2['XSRF-TOKEN']);
-  if (cookies2['mzadqatar_session'] || cookies2['XSRF-TOKEN']) {
-    commonHeaders['Cookie'] = buildCookieStr(
-      cookies2['mzadqatar_session'] || session,
-      cookies2['XSRF-TOKEN'] || xsrf,
-      extraCookies
-    );
-  }
-
-  console.log(`[Mzad] Step 2 status: ${step2Res.status}`);
-  // Log step2 response to understand server expectations for step3
-  const step2Body = typeof step2Res.data === 'string' ? step2Res.data.substring(0, 300) : JSON.stringify(step2Res.data)?.substring(0, 500);
-  console.log(`[Mzad] Step 2 response:`, step2Body);
-
-  // Check for validation errors
-  if (step2Res.data?.props?.errors && Object.keys(step2Res.data.props.errors).length > 0) {
-    throw new Error('Mzad step 2 validation: ' + JSON.stringify(step2Res.data.props.errors));
-  }
-
-  // ── Step 3: Submit ad content and publish ──
-  console.log(`[Mzad] Step 3: Publishing ad for unit ${property.Unit}...`);
-  console.log(`[Mzad] Step 3 data:`, JSON.stringify({ step1Data, step2Data, step3Data, step: 3 }).substring(0, 800));
-
-  // Step 3: Submit as JSON (images not required for basic ad creation)
-  console.log(`[Mzad] Step 3: Submitting ad (JSON)...`);
-  const step3Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
-    step1Data, step2Data, step3Data, step: 3,
-  }, { headers: commonHeaders, validateStatus: s => s < 600 });
-
-  console.log(`[Mzad] Step 3 multipart status: ${step3Res.status}`);
-
-  // Check response for ad creation success
-  const s3Props = step3Res.data?.props || {};
-  const s3AddData = s3Props.getAddAdvertiseData || {};
-  console.log(`[Mzad] Step 3 isCompleted:`, s3AddData.isCompleted);
-  console.log(`[Mzad] Step 3 errors:`, JSON.stringify(s3Props.errors || {}));
-  console.log(`[Mzad] Step 3 prevData:`, JSON.stringify(s3AddData.prevData || {}).substring(0, 300));
-
-  if (step3Res.status >= 500) {
-    const snippet = typeof step3Res.data === 'string' ? step3Res.data.substring(0, 300) : JSON.stringify(step3Res.data)?.substring(0, 300);
-    console.log(`[Mzad] Step 3 error response:`, snippet);
-    throw new Error(`Mzad step 3 server error: ${step3Res.status}`);
-  }
-
-  if (step3Res.status >= 400) {
-    throw new Error(`Mzad step 3 error: status ${step3Res.status}`);
-  }
-
-  // Check for validation errors
-  if (s3Props.errors && Object.keys(s3Props.errors).length > 0) {
-    throw new Error('Mzad step 3 validation: ' + JSON.stringify(s3Props.errors));
-  }
-
-  return step3Res.data;
+  return { step1Data, step2Data, step3Data };
 }
 
-module.exports = { getSession, postAd };
+// ─────────────────────────────────────────────
+// Main post function — Puppeteer-based browser submission
+// Uses real browser to submit the Inertia form, ensuring
+// correct cookies, CSRF, headers, and data format.
+// ─────────────────────────────────────────────
+async function postAd(property, sessionData) {
+  const { session, xsrf, csrfToken, extraCookies } = sessionData;
+  const { step1Data, step2Data, step3Data } = buildFormData(property);
+
+  console.log(`[Mzad] Puppeteer postAd for unit ${property.Unit}...`);
+  console.log(`[Mzad] Category: ${step1Data.categoryId}, SubCat: ${step2Data.subCategoryId}, Price: ${step3Data.productPrice}`);
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+        '--disable-gpu', '--no-first-run', '--no-zygote', '--single-process',
+      ],
+      ignoreDefaultArgs: ['--disable-extensions'],
+    });
+
+    const page = await browser.newPage();
+
+    // Set cookies for authenticated session
+    const cookiesToSet = [
+      { name: 'mzadqatar_session', value: session, domain: 'mzadqatar.com', path: '/' },
+      { name: 'XSRF-TOKEN', value: xsrf, domain: 'mzadqatar.com', path: '/' },
+      { name: 'selectedCountry', value: 'QA', domain: 'mzadqatar.com', path: '/' },
+      { name: 'currentLang', value: 'en', domain: 'mzadqatar.com', path: '/' },
+    ];
+    // Add extra cookies (cf_clearance, __cf_bm, etc.)
+    if (extraCookies) {
+      for (const [k, v] of Object.entries(extraCookies)) {
+        if (v && !['mzadqatar_session', 'XSRF-TOKEN', 'selectedCountry', 'currentLang'].includes(k)) {
+          cookiesToSet.push({ name: k, value: String(v), domain: '.mzadqatar.com', path: '/' });
+        }
+      }
+    }
+    // Also add cached CF cookies
+    if (cachedCfData?.cookies) {
+      for (const [k, v] of Object.entries(cachedCfData.cookies)) {
+        if (v && !cookiesToSet.find(c => c.name === k)) {
+          cookiesToSet.push({ name: k, value: String(v), domain: '.mzadqatar.com', path: '/' });
+        }
+      }
+    }
+
+    await page.setCookie(...cookiesToSet);
+    console.log(`[Mzad] Set ${cookiesToSet.length} cookies in Puppeteer`);
+
+    // Navigate to the add_advertise page
+    console.log(`[Mzad] Navigating to add_advertise page...`);
+    await page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 45000 });
+
+    // Wait for CF challenge to clear if present
+    const title = await page.title();
+    if (title.includes('Just a moment')) {
+      console.log(`[Mzad] Cloudflare challenge detected, waiting...`);
+      await page.waitForFunction(() => !document.title.includes('Just a moment'), { timeout: 25000 });
+      console.log(`[Mzad] Cloudflare challenge cleared`);
+    }
+
+    // Extract Inertia version and XSRF token from page
+    const pageContext = await page.evaluate(() => {
+      const dataPage = document.querySelector('[data-page]');
+      let pageData = {};
+      if (dataPage) {
+        try { pageData = JSON.parse(dataPage.getAttribute('data-page')); } catch(e) {}
+      }
+      // Get XSRF token from cookie
+      const xsrfCookie = document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='));
+      const xsrfValue = xsrfCookie ? decodeURIComponent(xsrfCookie.split('=').slice(1).join('=').trim()) : '';
+      // Get CSRF meta tag
+      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      return {
+        version: pageData.version || '',
+        component: pageData.component || '',
+        url: pageData.url || '',
+        xsrf: xsrfValue,
+        csrf: csrfMeta ? csrfMeta.content : '',
+        propsKeys: Object.keys(pageData.props || {}),
+      };
+    });
+
+    console.log(`[Mzad] Page context: component=${pageContext.component}, version=${pageContext.version}, xsrf=${pageContext.xsrf ? 'YES' : 'NO'}`);
+
+    // If redirected to login, session is invalid
+    if (pageContext.component === 'Login' || pageContext.url?.includes('login')) {
+      throw new Error('Mzad: Session expired — redirected to login page');
+    }
+
+    // Submit all 3 steps using fetch() from within the browser context
+    // This ensures correct cookies, CSRF, and Inertia handling
+    const result = await page.evaluate(async (step1Data, step2Data, step3Data, inertiaVersion) => {
+      const BASE = window.location.origin;
+
+      // Helper: get current XSRF token from cookies
+      function getXsrf() {
+        const c = document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='));
+        return c ? decodeURIComponent(c.split('=').slice(1).join('=').trim()) : '';
+      }
+
+      // Helper: make an Inertia POST request
+      async function inertiaPost(url, data) {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-Inertia': 'true',
+            'X-Inertia-Version': inertiaVersion,
+            'X-XSRF-TOKEN': getXsrf(),
+            'Accept': 'text/html, application/xhtml+xml',
+          },
+          credentials: 'same-origin',
+          body: JSON.stringify(data),
+        });
+        const text = await res.text();
+        let json = null;
+        try { json = JSON.parse(text); } catch(e) {}
+        return { status: res.status, json, text: text.substring(0, 2000), headers: Object.fromEntries(res.headers) };
+      }
+
+      const results = {};
+
+      // Step 1
+      const s1 = await inertiaPost(`${BASE}/en/add_advertise`, {
+        step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
+      });
+      results.step1 = { status: s1.status, errors: s1.json?.props?.errors };
+
+      // Step 2
+      const s2 = await inertiaPost(`${BASE}/en/add_advertise`, {
+        step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
+      });
+      results.step2 = {
+        status: s2.status,
+        errors: s2.json?.props?.errors,
+        addDataKeys: Object.keys(s2.json?.props?.getAddAdvertiseData || {}),
+      };
+
+      // Step 3
+      const s3 = await inertiaPost(`${BASE}/en/add_advertise`, {
+        step1Data, step2Data, step3Data, step: 3,
+      });
+      const s3AddData = s3.json?.props?.getAddAdvertiseData || {};
+      results.step3 = {
+        status: s3.status,
+        errors: s3.json?.props?.errors,
+        isCompleted: s3AddData.isCompleted,
+        prevData: JSON.stringify(s3AddData.prevData || {}).substring(0, 500),
+        addDataKeys: Object.keys(s3AddData),
+        component: s3.json?.component,
+        url: s3.json?.url,
+        fullResponse: JSON.stringify(s3.json || {}).substring(0, 3000),
+      };
+
+      // If step 3 didn't complete, try sending as multipart FormData
+      // (Inertia's useForm uses FormData when files are present)
+      if (!s3AddData.isCompleted) {
+        const fd = new FormData();
+        // Flatten step data into FormData with bracket notation
+        function appendObj(prefix, obj) {
+          for (const [k, v] of Object.entries(obj)) {
+            const key = `${prefix}[${k}]`;
+            if (v === null || v === undefined) {
+              fd.append(key, '');
+            } else if (typeof v === 'boolean') {
+              fd.append(key, v ? '1' : '0');
+            } else if (Array.isArray(v)) {
+              if (v.length === 0) {
+                // Send empty array marker
+                fd.append(`${key}[]`, '');
+              } else {
+                v.forEach((item, idx) => fd.append(`${key}[${idx}]`, item));
+              }
+            } else if (typeof v === 'object') {
+              appendObj(key, v);
+            } else {
+              fd.append(key, String(v));
+            }
+          }
+        }
+        appendObj('step1Data', step1Data);
+        appendObj('step2Data', step2Data);
+        appendObj('step3Data', step3Data);
+        fd.append('step', '3');
+
+        const s3fd = await fetch(`${BASE}/en/add_advertise`, {
+          method: 'POST',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-Inertia': 'true',
+            'X-Inertia-Version': inertiaVersion,
+            'X-XSRF-TOKEN': getXsrf(),
+            'Accept': 'text/html, application/xhtml+xml',
+          },
+          credentials: 'same-origin',
+          body: fd,
+        });
+        const s3fdText = await s3fd.text();
+        let s3fdJson = null;
+        try { s3fdJson = JSON.parse(s3fdText); } catch(e) {}
+        const s3fdAdd = s3fdJson?.props?.getAddAdvertiseData || {};
+        results.step3_formdata = {
+          status: s3fd.status,
+          errors: s3fdJson?.props?.errors,
+          isCompleted: s3fdAdd.isCompleted,
+          prevData: JSON.stringify(s3fdAdd.prevData || {}).substring(0, 500),
+          component: s3fdJson?.component,
+          url: s3fdJson?.url,
+          fullResponse: JSON.stringify(s3fdJson || {}).substring(0, 3000),
+        };
+      }
+
+      return results;
+    }, step1Data, step2Data, step3Data, pageContext.version);
+
+    console.log(`[Mzad] Puppeteer results:`, JSON.stringify(result, null, 2).substring(0, 3000));
+
+    // Check for success
+    const s3 = result.step3;
+    if (s3.isCompleted) {
+      console.log(`[Mzad] Ad created successfully for unit ${property.Unit}!`);
+      return { success: true, ...result };
+    }
+
+    // Check FormData attempt
+    if (result.step3_formdata?.isCompleted) {
+      console.log(`[Mzad] Ad created via FormData for unit ${property.Unit}!`);
+      return { success: true, ...result };
+    }
+
+    // Log detailed failure info
+    console.warn(`[Mzad] Ad NOT created. Step 3 isCompleted: ${s3.isCompleted}`);
+    console.warn(`[Mzad] Step 3 errors:`, JSON.stringify(s3.errors || {}));
+    console.warn(`[Mzad] Step 3 response:`, s3.fullResponse?.substring(0, 1500));
+
+    // Still return the response for debugging
+    return { success: false, ...result };
+  } catch (e) {
+    console.error(`[Mzad] Puppeteer postAd error:`, e.message);
+    throw e;
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch(e) {}
+    }
+  }
+}
+
+module.exports = { getSession, postAd, buildFormData };

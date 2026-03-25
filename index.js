@@ -536,185 +536,34 @@ app.get('/test-mzad-login', async (req, res) => {
   }
 });
 
-// Debug Mzad step-by-step to diagnose step 3 failure
+// Debug Mzad — uses Puppeteer-based postAd with a test property
 app.get('/debug-mzad-steps', async (req, res) => {
   try {
     const mzad = require('./mzad');
+    console.log('[debug-mzad] Getting session...');
     const session = await mzad.getSession();
     if (!session) return res.status(500).json({ error: 'No session' });
 
-    const axios = require('axios');
-    const BASE_URL = 'https://mzadqatar.com';
-    const { session: sess, xsrf, csrfToken, extraCookies } = session;
-
-    // Build cookie string
-    const cookies = [`mzadqatar_session=${sess}`, `XSRF-TOKEN=${xsrf}`];
-    if (extraCookies) {
-      for (const [k, v] of Object.entries(extraCookies)) {
-        cookies.push(`${k}=${v}`);
-      }
-    }
-
-    const decodedXsrf = decodeURIComponent(csrfToken || xsrf);
-
-    // Get Inertia version
-    let inertiaVersion = '';
-    try {
-      const pageRes = await axios.get(`${BASE_URL}/en/add_advertise`, {
-        headers: {
-          'Cookie': cookies.join('; '),
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-        },
-        validateStatus: s => s < 500,
-      });
-      const match = typeof pageRes.data === 'string' && pageRes.data.match(/version&quot;:&quot;([^&]+)&quot;/);
-      if (match) inertiaVersion = match[1];
-    } catch (e) {}
-
-    const commonHeaders = {
-      'Content-Type': 'application/json',
-      'X-Requested-With': 'XMLHttpRequest',
-      'X-Inertia': 'true',
-      'X-Inertia-Version': inertiaVersion,
-      'X-XSRF-TOKEN': decodedXsrf,
-      'Cookie': cookies.join('; '),
-      'Origin': BASE_URL,
-      'Referer': `${BASE_URL}/en/add_advertise`,
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html, application/xhtml+xml',
+    // Build a test property object
+    const testProperty = {
+      Unit: 'DEBUG-1',
+      Type: 'Apartment',
+      Location: 'Doha',
+      Region: 'D-Ring',
+      Bedrooms: '2',
+      Bathrooms: '2',
+      Size_sqm: '100',
+      Floor: '1',
+      Rent_QAR: '5000',
+      Maps_Link: '',
+      Notes: '',
     };
 
-    const step1Data = { categoryId: 8494, lang: 'en', mzadyUserNumber: null };
-    const step2Data = {
-      cityId: 3, regionId: '30', numberOfRooms: 2, location: '',
-      categoryAdvertiseTypeId: '3', furnishedTypeId: 107,
-      properterylevel: 346, lands_area: 100, properteryfinishing: 366,
-      properterybathrooms: 358, salesref: 'DEBUG-1', rentaltype: 791,
-      subCategoryId: 88,
-    };
-
-    // Step 1
-    const s1 = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-
-    // Update cookies from step 1
-    const sc1 = s1.headers['set-cookie'] || [];
-    for (const c of sc1) {
-      const m = c.match(/XSRF-TOKEN=([^;]+)/);
-      if (m) commonHeaders['X-XSRF-TOKEN'] = decodeURIComponent(m[1]);
-      const m2 = c.match(/mzadqatar_session=([^;]+)/);
-      if (m2) { /* update session cookie in header */ }
-    }
-    // Rebuild cookie from set-cookie
-    const newCookies = [...cookies];
-    for (const c of sc1) {
-      const parts = c.split(';')[0].split('=');
-      if (parts[0] === 'XSRF-TOKEN' || parts[0] === 'mzadqatar_session') {
-        const idx = newCookies.findIndex(ck => ck.startsWith(parts[0] + '='));
-        if (idx >= 0) newCookies[idx] = c.split(';')[0];
-        else newCookies.push(c.split(';')[0]);
-      }
-    }
-    commonHeaders['Cookie'] = newCookies.join('; ');
-
-    // Step 2
-    const s2 = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-
-    // Update cookies from step 2
-    const sc2 = s2.headers['set-cookie'] || [];
-    for (const c of sc2) {
-      const m = c.match(/XSRF-TOKEN=([^;]+)/);
-      if (m) commonHeaders['X-XSRF-TOKEN'] = decodeURIComponent(m[1]);
-      const parts = c.split(';')[0].split('=');
-      if (parts[0] === 'XSRF-TOKEN' || parts[0] === 'mzadqatar_session') {
-        const idx = newCookies.findIndex(ck => ck.startsWith(parts[0] + '='));
-        if (idx >= 0) newCookies[idx] = c.split(';')[0];
-        else newCookies.push(c.split(';')[0]);
-      }
-    }
-    commonHeaders['Cookie'] = newCookies.join('; ');
-
-    // Get full step 2 response props
-    const s2Props = s2.data?.props || {};
-    const s2PropsKeys = Object.keys(s2Props);
-
-    // Get apiData from step 2 response to understand form structure
-    const apiData = s2Props.getAddAdvertiseData?.apiData;
-    const apiDataSummary = apiData ? JSON.stringify(apiData).substring(0, 2000) : 'N/A';
-
-    // Helper to update cookies after each request
-    function updateCookies(response) {
-      const sc = response.headers['set-cookie'] || [];
-      for (const c of sc) {
-        const m = c.match(/XSRF-TOKEN=([^;]+)/);
-        if (m) commonHeaders['X-XSRF-TOKEN'] = decodeURIComponent(m[1]);
-        const parts = c.split(';')[0].split('=');
-        if (['XSRF-TOKEN', 'mzadqatar_session'].includes(parts[0])) {
-          const idx = newCookies.findIndex(ck => ck.startsWith(parts[0] + '='));
-          if (idx >= 0) newCookies[idx] = c.split(';')[0];
-          else newCookies.push(c.split(';')[0]);
-        }
-      }
-      commonHeaders['Cookie'] = newCookies.join('; ');
-    }
-
-    const results = {};
-
-    // Attempt A: JSON with correct field names + agree_commission
-    updateCookies(s2);
-    const correctStep3 = {
-      productNameEnglish: 'Apartment For Rent Doha',
-      productNameArabic: 'شقة للإيجار الدوحة',
-      productNameArEn: 'Apartment For Rent Doha',
-      productDescriptionEnglish: 'Nice 2BR apartment for rent in Doha Qatar. Fully finished. Contact us.',
-      productDescriptionArabic: 'شقة للإيجار في الدوحة قطر. غرفتين نوم.',
-      productDescriptionArEn: 'Nice 2BR apartment for rent in Doha Qatar.',
-      productPrice: 5000,
-      autoRenew: false,
-      currencyId: 1,
-      isResetImages: false,
-      images: [],
-      productId: null,
-      agree_commission: true,
-    };
-
-    const sA = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data: correctStep3, step: 3,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    const sAData = sA.data;
-    const sAAddData = sAData?.props?.getAddAdvertiseData || {};
-    results.attemptA_correct_fields = {
-      status: sA.status,
-      component: sAData?.component,
-      errors: sAData?.props?.errors,
-      isCompleted: sAAddData.isCompleted,
-      addDataKeys: Object.keys(sAAddData),
-      prevData: JSON.stringify(sAAddData.prevData || {}).substring(0, 1500),
-      adsSelectedData: sAAddData.adsSelectedData ? JSON.stringify(sAAddData.adsSelectedData).substring(0, 500) : null,
-      redirectUrl: sA.headers?.['x-inertia-location'] || sA.headers?.location || 'none',
-      url: sAData?.url,
-    };
-    updateCookies(sA);
-
-    res.json({
-      step1: { status: s1.status },
-      step2: {
-        status: s2.status,
-        propsKeys: s2PropsKeys,
-        errors: s2Props.errors,
-        getAddAdvertiseData: s2Props.getAddAdvertiseData ? {
-          keys: Object.keys(s2Props.getAddAdvertiseData),
-          prevData: s2Props.getAddAdvertiseData.prevData,
-          isCompleted: s2Props.getAddAdvertiseData.isCompleted,
-        } : null,
-        apiDataSummary,
-      },
-      results,
-    });
+    console.log('[debug-mzad] Running Puppeteer postAd...');
+    const result = await mzad.postAd(testProperty, session);
+    res.json({ status: 'done', result });
   } catch (e) {
+    console.error('[debug-mzad] Error:', e.message);
     res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
   }
 });
