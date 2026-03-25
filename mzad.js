@@ -21,10 +21,28 @@
 
 const axios = require('axios');
 const FormData = require('form-data');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 const { buildTitleAr, buildTitleEn, buildDescription } = require('./ad-builders');
 
 const BASE_URL = 'https://mzadqatar.com';
 const MZAD_RECAPTCHA_SITE_KEY = '6Lc-0vApAAAAAFu7_SOXa6yJIDgm6qAl9LY1vYVI';
+
+// ─────────────────────────────────────────────
+// Proxy-enabled axios instance for mzadqatar.com
+// Set PROXY_URL env var (e.g. http://user:pass@host:port)
+// Required because Railway IPs are blocked by Cloudflare
+// ─────────────────────────────────────────────
+function getMzadAxios() {
+  const proxyUrl = process.env.PROXY_URL;
+  if (proxyUrl) {
+    console.log('[Mzad] Using proxy for mzadqatar.com requests:', proxyUrl.replace(/\/\/.*@/, '//***@'));
+    const agent = new HttpsProxyAgent(proxyUrl);
+    return axios.create({ httpsAgent: agent, httpAgent: agent, proxy: false });
+  }
+  console.log('[Mzad] WARNING: No PROXY_URL set. Railway IPs may be blocked by Cloudflare.');
+  return axios;
+}
+const mzadAxios = getMzadAxios();
 
 // ─────────────────────────────────────────────
 // Category mapping (from mzadqatar.com Inertia props)
@@ -117,7 +135,7 @@ async function solveCloudflareChallenge(url) {
 
   try {
     // First, get the challenge page HTML to extract any sitekey
-    const pageRes = await axios.get(url, {
+    const pageRes = await mzadAxios.get(url, {
       headers: {
         'Accept': 'text/html',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -225,7 +243,7 @@ function decodedXsrf(xsrf) {
 // ─────────────────────────────────────────────
 async function getInitialCookies() {
   console.log('[Mzad] Fetching initial cookies from login page...');
-  const res = await axios.get(`${BASE_URL}/en/login`, {
+  const res = await mzadAxios.get(`${BASE_URL}/en/login`, {
     headers: {
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -261,7 +279,7 @@ async function getInitialCookies() {
 async function isSessionValid(session, xsrf) {
   if (!session || !xsrf) { console.log('[Mzad] isSessionValid: missing session or xsrf'); return false; }
   try {
-    const res = await axios.get(`${BASE_URL}/en/add_advertise`, {
+    const res = await mzadAxios.get(`${BASE_URL}/en/add_advertise`, {
       headers: {
         'Cookie': buildCookieStr(session, xsrf),
         'X-Inertia': 'true',
@@ -298,7 +316,7 @@ async function loginWithPassword() {
   const recaptchaToken = await solveRecaptchaV3('login');
 
   console.log('[Mzad] Logging in with password for phone', phone, '...');
-  const loginRes = await axios.post(`${BASE_URL}/en/login`, {
+  const loginRes = await mzadAxios.post(`${BASE_URL}/en/login`, {
     phone,
     password,
     recaptchaToken: recaptchaToken || 'placeholder-token',
@@ -360,7 +378,7 @@ async function loginWithOtp() {
   console.log('[Mzad] Sending OTP request to phone', phone, '...');
   console.log('[Mzad] reCAPTCHA token1:', recaptchaToken1 ? `${recaptchaToken1.substring(0, 30)}... (len=${recaptchaToken1.length})` : 'NULL (using placeholder)');
   console.log('[Mzad] All cookies being sent:', Object.keys(extraCookies).join(', '));
-  const otpReqRes = await axios.post(`${BASE_URL}/en/login`, otpBody, {
+  const otpReqRes = await mzadAxios.post(`${BASE_URL}/en/login`, otpBody, {
     headers: {
       'Content-Type': 'application/json',
       'X-CSRF-TOKEN': csrf,
@@ -393,7 +411,7 @@ async function loginWithOtp() {
       // Merge Cloudflare cookies and retry
       Object.assign(extraCookies, cfResult.cookies);
       console.log('[Mzad] Cloudflare solved, retrying OTP request with cf cookies...');
-      const retryRes = await axios.post(`${BASE_URL}/en/login`, otpBody, {
+      const retryRes = await mzadAxios.post(`${BASE_URL}/en/login`, otpBody, {
         headers: {
           'Content-Type': 'application/json',
           'X-CSRF-TOKEN': csrf,
@@ -439,7 +457,7 @@ async function loginWithOtp() {
   console.log('[Mzad] Verifying OTP', otp, '...');
   console.log('[Mzad] reCAPTCHA token2:', recaptchaToken2 ? `${recaptchaToken2.substring(0, 30)}... (len=${recaptchaToken2.length})` : 'NULL (using placeholder)');
   console.log('[Mzad] Verify all cookies:', Object.keys(extraCookies).join(', '));
-  const verifyRes = await axios.post(`${BASE_URL}/en/login`, verifyBody, {
+  const verifyRes = await mzadAxios.post(`${BASE_URL}/en/login`, verifyBody, {
     headers: {
       'Content-Type': 'application/json',
       'X-CSRF-TOKEN': csrf,
@@ -517,7 +535,7 @@ async function getSession() {
 // ─────────────────────────────────────────────
 async function getInertiaVersion(session, xsrf) {
   try {
-    const res = await axios.get(`${BASE_URL}/en/add_advertise`, {
+    const res = await mzadAxios.get(`${BASE_URL}/en/add_advertise`, {
       headers: {
         'Cookie': buildCookieStr(session, xsrf),
         'Accept': 'text/html',
@@ -697,7 +715,7 @@ async function postAd(property, sessionData) {
 
   // ── Step 1: Submit category selection ──
   console.log(`[Mzad] Step 1: Submitting category ${categoryId} for unit ${property.Unit}...`);
-  const step1Res = await axios.post(`${BASE_URL}/en/add_advertise`, {
+  const step1Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
     step1Data,
     step2Data: {},
     step3Data: { autoRenew: false, currencyId: 1, isResetImages: false },
@@ -719,7 +737,7 @@ async function postAd(property, sessionData) {
 
   // ── Step 2: Submit property details ──
   console.log(`[Mzad] Step 2: Submitting property details for unit ${property.Unit}...`);
-  const step2Res = await axios.post(`${BASE_URL}/en/add_advertise`, {
+  const step2Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
     step1Data,
     step2Data,
     step3Data: { autoRenew: false, currencyId: 1, isResetImages: false },
@@ -761,7 +779,7 @@ async function postAd(property, sessionData) {
   delete step3Headers['Content-Type']; // form-data sets its own
   Object.assign(step3Headers, fd.getHeaders());
 
-  const step3Res = await axios.post(`${BASE_URL}/en/add_advertise`, fd, {
+  const step3Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, fd, {
     headers: step3Headers,
     validateStatus: s => s < 500,
     maxContentLength: Infinity,
@@ -774,7 +792,7 @@ async function postAd(property, sessionData) {
   if (step3Res.status >= 400) {
     console.log(`[Mzad] Step 3 multipart failed (${step3Res.status}), retrying with JSON...`);
     delete step3Data.images;
-    const step3JsonRes = await axios.post(`${BASE_URL}/en/add_advertise`, {
+    const step3JsonRes = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
       step1Data, step2Data, step3Data, step: 3,
     }, { headers: { ...commonHeaders, 'Content-Type': 'application/json' }, validateStatus: s => s < 600 });
 
