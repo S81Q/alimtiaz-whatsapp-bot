@@ -718,9 +718,10 @@ function buildFormData(property) {
 }
 
 // ─────────────────────────────────────────────
-// Main post function — Puppeteer in-browser fetch
-// Uses Puppeteer to bypass Cloudflare, then submits
-// the Inertia form via fetch() from browser context.
+// Main post function — Axios-based Inertia form submission
+// Uses axios with CF clearance cookies (same cookies that
+// work for session validation) to submit the 3-step form.
+// No Puppeteer needed — CF bypass is already done by getSession().
 // ─────────────────────────────────────────────
 async function postAd(property, sessionData) {
   const { session, xsrf, csrfToken, extraCookies } = sessionData;
@@ -728,273 +729,143 @@ async function postAd(property, sessionData) {
 
   console.log(`[Mzad] postAd for unit ${property.Unit} (lang=${step1Data.lang})...`);
 
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-        '--disable-gpu', '--no-first-run', '--no-zygote', '--single-process',
-      ],
-      ignoreDefaultArgs: ['--disable-extensions'],
-    });
+  const cfExtra = cachedCfData?.cookies || {};
+  const ua = cachedCfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+  const allExtra = { ...cfExtra, ...(extraCookies || {}) };
 
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 900 });
+  // Get the Inertia version from the page
+  const version = await getInertiaVersion(session, xsrf);
+  console.log(`[Mzad] Inertia version: ${version || '(empty)'}`);
 
-    // Set cookies for authenticated session
-    const cookiesToSet = [
-      { name: 'mzadqatar_session', value: session, domain: 'mzadqatar.com', path: '/' },
-      { name: 'XSRF-TOKEN', value: xsrf, domain: 'mzadqatar.com', path: '/' },
-      { name: 'selectedCountry', value: 'QA', domain: 'mzadqatar.com', path: '/' },
-      { name: 'currentLang', value: 'en', domain: 'mzadqatar.com', path: '/' },
-    ];
-    if (extraCookies) {
-      for (const [k, v] of Object.entries(extraCookies)) {
-        if (v && !['mzadqatar_session', 'XSRF-TOKEN', 'selectedCountry', 'currentLang'].includes(k)) {
-          cookiesToSet.push({ name: k, value: String(v), domain: '.mzadqatar.com', path: '/' });
-        }
-      }
-    }
-    if (cachedCfData?.cookies) {
-      for (const [k, v] of Object.entries(cachedCfData.cookies)) {
-        if (v && !cookiesToSet.find(c => c.name === k)) {
-          cookiesToSet.push({ name: k, value: String(v), domain: '.mzadqatar.com', path: '/' });
-        }
-      }
-    }
-    await page.setCookie(...cookiesToSet);
+  // Helper: submit a step via axios (Inertia POST)
+  let currentSession = session;
+  let currentXsrf = xsrf;
 
-    // First navigate to base URL to solve any Cloudflare challenge
-    console.log(`[Mzad] Navigating to base URL for CF bypass...`);
-    await page.goto(`${BASE_URL}/en`, { waitUntil: 'networkidle2', timeout: 60000 });
+  async function submitStep(stepData, stepNum) {
+    const cookieStr = buildCookieStr(currentSession, currentXsrf, allExtra);
+    const csrfVal = decodedXsrf(currentXsrf);
 
-    // Wait for CF challenge to resolve
-    const startCf = Date.now();
-    while (Date.now() - startCf < 25000) {
-      const title = await page.title();
-      if (!title.includes('Just a moment')) break;
-      console.log(`[Mzad] CF challenge in progress...`);
-      await new Promise(r => setTimeout(r, 2000));
-    }
+    try {
+      const res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, stepData, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/html, application/xhtml+xml',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Inertia': 'true',
+          'X-Inertia-Version': version,
+          'X-XSRF-TOKEN': csrfVal,
+          'Cookie': cookieStr,
+          'Origin': BASE_URL,
+          'Referer': `${BASE_URL}/en/add_advertise`,
+          'User-Agent': ua,
+        },
+        maxRedirects: 0,
+        validateStatus: s => s < 500,
+      });
 
-    // Now set session cookies again (CF may have overwritten some)
-    await page.setCookie(...cookiesToSet);
+      // Update cookies from response
+      const resCookies = parseCookies(res.headers['set-cookie']);
+      if (resCookies['mzadqatar_session']) currentSession = resCookies['mzadqatar_session'];
+      if (resCookies['XSRF-TOKEN']) currentXsrf = resCookies['XSRF-TOKEN'];
+      Object.assign(allExtra, resCookies);
 
-    // Navigate to add_advertise
-    console.log(`[Mzad] Navigating to add_advertise...`);
-    await page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 60000 });
-
-    // Wait again for CF if needed
-    const pageTitle = await page.title();
-    if (pageTitle.includes('Just a moment')) {
-      console.log(`[Mzad] Cloudflare challenge on add_advertise, waiting...`);
-      await page.waitForFunction(() => !document.title.includes('Just a moment'), { timeout: 30000 });
-    }
-
-    // Check if on login page (session expired)
-    const currentUrl = page.url();
-    console.log(`[Mzad] Current URL after navigation: ${currentUrl}`);
-    if (currentUrl.includes('/login')) {
-      // Try re-logging in via Puppeteer directly
-      console.log(`[Mzad] Redirected to login — session invalid in this browser. Trying password login in-browser...`);
-      const password = process.env.MZAD_PASSWORD;
-      const phone = process.env.MZAD_PHONE || '70297066';
-      if (password) {
-        // Extract CSRF token from login page
-        const loginCsrf = await page.evaluate(() => {
-          const meta = document.querySelector('meta[name="csrf-token"]');
-          return meta ? meta.content : '';
-        });
-        const loginXsrf = await page.evaluate(() => {
-          const c = document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='));
-          return c ? decodeURIComponent(c.split('=').slice(1).join('=').trim()) : '';
-        });
-
-        // Submit login via fetch in browser
-        const loginResult = await page.evaluate(async (phone, password, csrf) => {
-          const xsrf = document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='));
-          const token = xsrf ? decodeURIComponent(xsrf.split('=').slice(1).join('=').trim()) : csrf;
-          const res = await fetch('/en/login', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-XSRF-TOKEN': token,
-              'X-Requested-With': 'XMLHttpRequest',
-              'X-Inertia': 'true',
-              'Accept': 'text/html, application/xhtml+xml',
-            },
-            body: JSON.stringify({ phone, password, recaptchaToken: 'browser-login' }),
-            credentials: 'same-origin',
-          });
-          return { status: res.status, url: res.url };
-        }, phone, password, loginCsrf);
-
-        console.log(`[Mzad] In-browser login result: status=${loginResult.status}`);
-
-        // Navigate to add_advertise again
-        await page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 60000 });
-        const newUrl = page.url();
-        if (newUrl.includes('/login')) {
-          throw new Error('Mzad: Session expired — in-browser login also failed');
-        }
-        console.log(`[Mzad] In-browser login successful, now on: ${newUrl}`);
+      // Parse Inertia response
+      let json = null;
+      if (typeof res.data === 'object') {
+        json = res.data;
       } else {
-        throw new Error('Mzad: Session expired — redirected to login');
+        try { json = JSON.parse(String(res.data)); } catch(e) {}
       }
-    }
 
-    // Extract Inertia page data and XSRF token from browser
-    const pageInfo = await page.evaluate(() => {
-      const dataPage = document.querySelector('[data-page]');
-      let inertiaData = {};
-      if (dataPage) {
-        try { inertiaData = JSON.parse(dataPage.getAttribute('data-page')); } catch(e) {}
-      }
-      const xsrfCookie = document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='));
-      const xsrfVal = xsrfCookie ? decodeURIComponent(xsrfCookie.split('=').slice(1).join('=').trim()) : '';
-      return {
-        version: inertiaData.version || '',
-        component: inertiaData.component || '',
-        prevData: inertiaData.props?.getAddAdvertiseData?.prevData || {},
-        isCompleted: inertiaData.props?.getAddAdvertiseData?.isCompleted,
-        xsrf: xsrfVal,
+      const result = {
+        status: res.status,
+        isInertia: !!json?.component,
+        component: json?.component || '',
+        prevData: json?.props?.getAddAdvertiseData?.prevData || null,
+        isCompleted: json?.props?.getAddAdvertiseData?.isCompleted || false,
+        errors: json?.props?.errors || {},
+        apiDataKeys: json?.props?.getAddAdvertiseData?.apiData ? Object.keys(json.props.getAddAdvertiseData.apiData) : [],
+        bodyPreview: typeof res.data === 'string' ? res.data.substring(0, 300) : JSON.stringify(res.data).substring(0, 300),
       };
-    });
 
-    console.log(`[Mzad] Page loaded: component=${pageInfo.component}, version=${pageInfo.version}, prevStep=${pageInfo.prevData?.step}`);
-
-    if (pageInfo.isCompleted) {
-      console.log(`[Mzad] Previous ad already completed — posting new one`);
-    }
-
-    // ─── Submit all 3 steps via Inertia-style fetch from browser context ───
-
-    // Helper: submit a step via fetch (Inertia POST)
-    async function submitStep(stepData, stepNum) {
-      const result = await page.evaluate(async (data, version) => {
-        try {
-          const xsrf = document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='));
-          const token = xsrf ? decodeURIComponent(xsrf.split('=').slice(1).join('=').trim()) : '';
-
-          const res = await fetch('/en/add_advertise', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'text/html, application/xhtml+xml',
-              'X-Requested-With': 'XMLHttpRequest',
-              'X-Inertia': 'true',
-              'X-Inertia-Version': version,
-              'X-XSRF-TOKEN': token,
-            },
-            body: JSON.stringify(data),
-            credentials: 'same-origin',
-          });
-
-          const text = await res.text();
-          let json = null;
-          try { json = JSON.parse(text); } catch(e) {}
-
-          return {
-            status: res.status,
-            redirected: res.redirected,
-            url: res.url,
-            isInertia: !!json?.component,
-            component: json?.component || '',
-            prevData: json?.props?.getAddAdvertiseData?.prevData || null,
-            isCompleted: json?.props?.getAddAdvertiseData?.isCompleted || false,
-            errors: json?.props?.errors || {},
-            apiDataKeys: json?.props?.getAddAdvertiseData?.apiData ? Object.keys(json.props.getAddAdvertiseData.apiData) : [],
-            bodyPreview: text.substring(0, 500),
-          };
-        } catch (e) {
-          return { error: e.message };
-        }
-      }, stepData, pageInfo.version);
-
-      console.log(`[Mzad] Step ${stepNum} response: status=${result.status}, component=${result.component}, isCompleted=${result.isCompleted}`);
+      console.log(`[Mzad] Step ${stepNum} response: status=${result.status}, isInertia=${result.isInertia}, component=${result.component}, isCompleted=${result.isCompleted}`);
       if (result.prevData) {
         console.log(`[Mzad] Step ${stepNum} prevData:`, JSON.stringify(result.prevData).substring(0, 500));
       }
       if (result.errors && Object.keys(result.errors).length > 0) {
         console.log(`[Mzad] Step ${stepNum} errors:`, JSON.stringify(result.errors));
       }
+      if (result.apiDataKeys.length > 0) {
+        console.log(`[Mzad] Step ${stepNum} apiData keys:`, result.apiDataKeys.join(', '));
+      }
       return result;
-    }
-
-    // STEP 1: Language + Category
-    console.log(`[Mzad] Submitting Step 1: lang=${step1Data.lang}, categoryId=${step1Data.categoryId}`);
-    const step1Result = await submitStep({
-      step1Data: { categoryId: step1Data.categoryId, lang: step1Data.lang },
-      step: 1,
-    }, 1);
-
-    if (step1Result.error) {
-      return { success: false, error: `Step 1 failed: ${step1Result.error}` };
-    }
-
-    // STEP 2: Property details
-    // The step2Data field names come from the server's filter config.
-    // We send our data which uses the correct filter IDs.
-    console.log(`[Mzad] Submitting Step 2...`);
-    const step2Payload = {
-      step1Data: { categoryId: step1Data.categoryId, lang: step1Data.lang },
-      step2Data,
-      step: 2,
-    };
-    const step2Result = await submitStep(step2Payload, 2);
-
-    if (step2Result.error) {
-      return { success: false, error: `Step 2 failed: ${step2Result.error}` };
-    }
-
-    // Check if step 2 returned didNotSaved (validation issue)
-    if (step2Result.prevData?.step === 1 || step2Result.prevData?.step === '1') {
-      console.warn(`[Mzad] Step 2 bounced back to step 1. Possible validation error.`);
-      console.log(`[Mzad] Step 2 apiData keys:`, step2Result.apiDataKeys);
-      return { success: false, error: 'Step 2 validation failed', details: step2Result };
-    }
-
-    // STEP 3: Ad content + images + submit
-    console.log(`[Mzad] Submitting Step 3 (final)...`);
-    const step3Payload = {
-      step1Data: { categoryId: step1Data.categoryId, lang: step1Data.lang },
-      step2Data,
-      step3Data: {
-        ...step3Data,
-        images: [],
-        isResetImages: false,
-        agree_commission: 1,
-      },
-      step: 3,
-    };
-    const step3Result = await submitStep(step3Payload, 3);
-
-    if (step3Result.error) {
-      return { success: false, error: `Step 3 failed: ${step3Result.error}` };
-    }
-
-    // Check for success
-    const success = step3Result.isCompleted ||
-      step3Result.url?.includes('/myads') ||
-      step3Result.bodyPreview?.includes('successfully');
-
-    if (success) {
-      console.log(`[Mzad] ✓ Ad created successfully for unit ${property.Unit}!`);
-    } else {
-      console.warn(`[Mzad] Ad may not have been created. isCompleted=${step3Result.isCompleted}`);
-      console.log(`[Mzad] Step 3 full result:`, JSON.stringify(step3Result).substring(0, 1000));
-    }
-
-    return { success, step1: step1Result, step2: step2Result, step3: step3Result };
-  } catch (e) {
-    console.error(`[Mzad] postAd error:`, e.message);
-    throw e;
-  } finally {
-    if (browser) {
-      try { await browser.close(); } catch(e) {}
+    } catch (e) {
+      console.error(`[Mzad] Step ${stepNum} axios error:`, e.message);
+      return { error: e.message, status: e.response?.status };
     }
   }
+
+  // STEP 1: Language + Category
+  console.log(`[Mzad] Submitting Step 1: lang=${step1Data.lang}, categoryId=${step1Data.categoryId}`);
+  const step1Result = await submitStep({
+    step1Data: { categoryId: step1Data.categoryId, lang: step1Data.lang },
+    step: 1,
+  }, 1);
+
+  if (step1Result.error) {
+    return { success: false, error: `Step 1 failed: ${step1Result.error}` };
+  }
+
+  // STEP 2: Property details
+  console.log(`[Mzad] Submitting Step 2...`);
+  const step2Payload = {
+    step1Data: { categoryId: step1Data.categoryId, lang: step1Data.lang },
+    step2Data,
+    step: 2,
+  };
+  const step2Result = await submitStep(step2Payload, 2);
+
+  if (step2Result.error) {
+    return { success: false, error: `Step 2 failed: ${step2Result.error}` };
+  }
+
+  // Check if step 2 bounced back
+  if (step2Result.prevData?.step === 1 || step2Result.prevData?.step === '1') {
+    console.warn(`[Mzad] Step 2 bounced back to step 1.`);
+    return { success: false, error: 'Step 2 validation failed', details: step2Result };
+  }
+
+  // STEP 3: Ad content + submit
+  console.log(`[Mzad] Submitting Step 3 (final)...`);
+  const step3Payload = {
+    step1Data: { categoryId: step1Data.categoryId, lang: step1Data.lang },
+    step2Data,
+    step3Data: {
+      ...step3Data,
+      images: [],
+      isResetImages: false,
+      agree_commission: 1,
+    },
+    step: 3,
+  };
+  const step3Result = await submitStep(step3Payload, 3);
+
+  if (step3Result.error) {
+    return { success: false, error: `Step 3 failed: ${step3Result.error}` };
+  }
+
+  // Check for success
+  const success = step3Result.isCompleted ||
+    step3Result.bodyPreview?.includes('successfully');
+
+  if (success) {
+    console.log(`[Mzad] Ad created successfully for unit ${property.Unit}!`);
+  } else {
+    console.warn(`[Mzad] Ad may not have been created. isCompleted=${step3Result.isCompleted}`);
+    console.log(`[Mzad] Step 3 full result:`, JSON.stringify(step3Result).substring(0, 1000));
+  }
+
+  return { success, step1: step1Result, step2: step2Result, step3: step3Result };
 }
 
 module.exports = { getSession, postAd, buildFormData };
