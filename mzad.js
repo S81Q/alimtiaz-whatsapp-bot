@@ -253,7 +253,7 @@ async function loginWithOtp() {
       'Content-Type': 'application/json',
       'X-CSRF-TOKEN': csrf,
       'X-Requested-With': 'XMLHttpRequest',
-      'Cookie': buildCookieStr(xsrf ? encodeURIComponent(csrf) : '', session),
+      'Cookie': buildCookieStr(session, xsrf),
       'Origin': BASE_URL,
       'Referer': `${BASE_URL}/en/login`,
       'Accept': 'application/json',
@@ -294,7 +294,7 @@ async function loginWithOtp() {
       'X-CSRF-TOKEN': csrf,
       'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true',
-      'Cookie': buildCookieStr(xsrf, session),
+      'Cookie': buildCookieStr(session, xsrf),
       'Origin': BASE_URL,
       'Referer': `${BASE_URL}/en/login`,
       'Accept': 'application/json',
@@ -307,6 +307,12 @@ async function loginWithOtp() {
   const finalSession = finalCookies['mzadqatar_session'] || session;
   const finalXsrf = finalCookies['XSRF-TOKEN'] || xsrf;
   const finalCsrf = decodedXsrf(finalXsrf);
+
+  console.log('[Mzad] OTP verify status:', verifyRes.status);
+
+  // Validate the session actually works
+  const valid = await isSessionValid(finalSession, finalXsrf);
+  if (!valid) throw new Error('Mzad: OTP login failed – session not authenticated after OTP verify');
 
   // Store for this process and log for Railway env var update
   process.env.MZAD_SESSION = finalSession;
