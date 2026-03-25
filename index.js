@@ -663,67 +663,27 @@ app.get('/debug-mzad-steps', async (req, res) => {
 
     const results = {};
 
-    // Attempt A: Correct field names + multipart with image + agree_commission
+    // Attempt A: JSON with correct field names + agree_commission
     updateCookies(s2);
-    const FormData = require('form-data');
-    const imgBuf = Buffer.from([
-      0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
-      0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
-      0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09,
-      0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
-      0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20,
-      0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
-      0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
-      0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01,
-      0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00,
-      0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-      0x09, 0x0A, 0x0B, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F,
-      0x00, 0x7B, 0x40, 0x1B, 0xFF, 0xD9
-    ]);
+    const correctStep3 = {
+      productNameEnglish: 'Apartment For Rent Doha',
+      productNameArabic: 'شقة للإيجار الدوحة',
+      productNameArEn: 'Apartment For Rent Doha',
+      productDescriptionEnglish: 'Nice 2BR apartment for rent in Doha Qatar. Fully finished. Contact us.',
+      productDescriptionArabic: 'شقة للإيجار في الدوحة قطر. غرفتين نوم.',
+      productDescriptionArEn: 'Nice 2BR apartment for rent in Doha Qatar.',
+      productPrice: 5000,
+      autoRenew: false,
+      currencyId: 1,
+      isResetImages: false,
+      images: [],
+      productId: null,
+      agree_commission: true,
+    };
 
-    const fd = new FormData();
-    fd.append('step1Data[categoryId]', '8494');
-    fd.append('step1Data[lang]', 'en');
-    fd.append('step1Data[mzadyUserNumber]', '');
-    fd.append('step2Data[cityId]', '3');
-    fd.append('step2Data[regionId]', '30');
-    fd.append('step2Data[numberOfRooms]', '2');
-    fd.append('step2Data[location]', '');
-    fd.append('step2Data[categoryAdvertiseTypeId]', '3');
-    fd.append('step2Data[furnishedTypeId]', '107');
-    fd.append('step2Data[properterylevel]', '346');
-    fd.append('step2Data[lands_area]', '100');
-    fd.append('step2Data[properteryfinishing]', '366');
-    fd.append('step2Data[properterybathrooms]', '358');
-    fd.append('step2Data[salesref]', 'DEBUG-1');
-    fd.append('step2Data[rentaltype]', '791');
-    fd.append('step2Data[subCategoryId]', '88');
-    fd.append('step3Data[productNameEnglish]', 'Apartment For Rent Doha');
-    fd.append('step3Data[productNameArabic]', 'شقة للإيجار الدوحة');
-    fd.append('step3Data[productNameArEn]', 'Apartment For Rent Doha');
-    fd.append('step3Data[productDescriptionEnglish]', 'Nice 2BR apartment for rent in Doha Qatar. Fully finished. Contact us for viewing.');
-    fd.append('step3Data[productDescriptionArabic]', 'شقة للإيجار في الدوحة قطر');
-    fd.append('step3Data[productDescriptionArEn]', 'Nice 2BR apartment for rent in Doha Qatar.');
-    fd.append('step3Data[productPrice]', '5000');
-    fd.append('step3Data[autoRenew]', '0');
-    fd.append('step3Data[currencyId]', '1');
-    fd.append('step3Data[isResetImages]', '0');
-    fd.append('step3Data[productId]', '');
-    fd.append('step3Data[agree_commission]', '1');
-    fd.append('step3Data[images][0]', imgBuf, { filename: 'property.jpg', contentType: 'image/jpeg' });
-    fd.append('step', '3');
-
-    const fdHeaders = { ...commonHeaders };
-    delete fdHeaders['Content-Type'];
-    Object.assign(fdHeaders, fd.getHeaders());
-
-    const sA = await axios.post(`${BASE_URL}/en/add_advertise`, fd, {
-      headers: fdHeaders,
-      validateStatus: s => s < 600,
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-    });
+    const sA = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data: correctStep3, step: 3,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
     const sAData = sA.data;
     const sAAddData = sAData?.props?.getAddAdvertiseData || {};
     results.attemptA_correct_fields = {

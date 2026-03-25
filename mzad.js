@@ -822,23 +822,11 @@ async function postAd(property, sessionData) {
   console.log(`[Mzad] Step 3: Publishing ad for unit ${property.Unit}...`);
   console.log(`[Mzad] Step 3 data:`, JSON.stringify({ step1Data, step2Data, step3Data, step: 3 }).substring(0, 800));
 
-  // Step 3: Use multipart FormData with placeholder image (image is required for ad creation)
-  console.log(`[Mzad] Step 3: Submitting ad with image (multipart)...`);
-  const imageBuffer = generatePlaceholderImage();
-  const step3WithImage = { ...step3Data, images: [imageBuffer] };
-  const formPayload = { step1Data, step2Data, step3Data: step3WithImage, step: 3 };
-  const fd = objectToFormData(formPayload);
-
-  const step3Headers = { ...commonHeaders };
-  delete step3Headers['Content-Type'];
-  Object.assign(step3Headers, fd.getHeaders());
-
-  const step3Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, fd, {
-    headers: step3Headers,
-    validateStatus: s => s < 600,
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
-  });
+  // Step 3: Submit as JSON (images not required for basic ad creation)
+  console.log(`[Mzad] Step 3: Submitting ad (JSON)...`);
+  const step3Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
+    step1Data, step2Data, step3Data, step: 3,
+  }, { headers: commonHeaders, validateStatus: s => s < 600 });
 
   console.log(`[Mzad] Step 3 multipart status: ${step3Res.status}`);
 
