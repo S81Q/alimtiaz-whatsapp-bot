@@ -314,27 +314,28 @@ async function isSessionValid(session, xsrf) {
   try {
     const cfExtra = cachedCfData?.cookies || {};
     const ua = cachedCfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+    // Use a plain HTML GET (not Inertia) to check if session redirects to login
     const res = await mzadAxios.get(`${BASE_URL}/en/add_advertise`, {
       headers: {
         'Cookie': buildCookieStr(session, xsrf, cfExtra),
-        'X-Inertia': 'true',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Accept': 'application/json',
-        'X-Inertia-Version': '1',
+        'Accept': 'text/html',
         'User-Agent': ua,
       },
       maxRedirects: 0,
       validateStatus: s => s < 500,
     });
-    // 200 = valid, 409 = Inertia version mismatch (still authenticated)
-    // 302 = redirect to login (not authenticated)
-    const valid = res.status === 200 || res.status === 409;
-    // Extra check: if 302, check redirect location
+    // 200 = valid (got the add_advertise page)
+    // 302 = redirect (likely to login = not authenticated)
     if (res.status === 302) {
       const location = res.headers['location'] || '';
-      console.log('[Mzad] isSessionValid: status=302, redirect to:', location);
+      const isLoginRedirect = location.includes('/login');
+      console.log('[Mzad] isSessionValid: status=302, redirect to:', location, '→', isLoginRedirect ? 'INVALID' : 'VALID (non-login redirect)');
+      return !isLoginRedirect;
     }
-    console.log('[Mzad] isSessionValid: status=', res.status, 'valid=', valid);
+    const html = String(res.data);
+    const isLoginPage = html.includes('Log In') && html.includes('Enter your mobile');
+    const valid = res.status === 200 && !isLoginPage;
+    console.log('[Mzad] isSessionValid: status=', res.status, 'isLoginPage=', isLoginPage, 'valid=', valid);
     return valid;
   } catch (e) {
     console.log('[Mzad] isSessionValid: error=', e.message);
