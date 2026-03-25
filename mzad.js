@@ -524,7 +524,7 @@ async function postAd(property, sessionData) {
     'X-Requested-With': 'XMLHttpRequest',
     'X-Inertia': 'true',
     'X-Inertia-Version': inertiaVersion,
-    'X-XSRF-TOKEN': xsrf,
+    'X-XSRF-TOKEN': csrfToken,
     'Cookie': buildCookieStr(session, xsrf),
     'Origin': BASE_URL,
     'Referer': `${BASE_URL}/en/add_advertise`,
@@ -542,7 +542,7 @@ async function postAd(property, sessionData) {
 
   // Update cookies if server sends new ones
   const cookies1 = parseCookies(step1Res.headers['set-cookie']);
-  if (cookies1['XSRF-TOKEN']) commonHeaders['X-XSRF-TOKEN'] = cookies1['XSRF-TOKEN'];
+  if (cookies1['XSRF-TOKEN']) commonHeaders['X-XSRF-TOKEN'] = decodedXsrf(cookies1['XSRF-TOKEN']);
   if (cookies1['mzadqatar_session']) {
     commonHeaders['Cookie'] = buildCookieStr(
       cookies1['mzadqatar_session'] || session,
@@ -562,7 +562,7 @@ async function postAd(property, sessionData) {
   }, { headers: commonHeaders, validateStatus: s => s < 500 });
 
   const cookies2 = parseCookies(step2Res.headers['set-cookie']);
-  if (cookies2['XSRF-TOKEN']) commonHeaders['X-XSRF-TOKEN'] = cookies2['XSRF-TOKEN'];
+  if (cookies2['XSRF-TOKEN']) commonHeaders['X-XSRF-TOKEN'] = decodedXsrf(cookies2['XSRF-TOKEN']);
   if (cookies2['mzadqatar_session']) {
     commonHeaders['Cookie'] = buildCookieStr(
       cookies2['mzadqatar_session'] || session,
