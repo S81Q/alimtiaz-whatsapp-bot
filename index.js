@@ -684,11 +684,19 @@ app.get('/debug-mzad-steps', async (req, res) => {
     const sA = await axios.post(`${BASE_URL}/en/add_advertise`, {
       step1Data, step2Data, step3Data: correctStep3, step: 3,
     }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    const sAStr = typeof sA.data === 'string' ? sA.data.substring(0, 2000) : JSON.stringify(sA.data).substring(0, 3000);
+    const sAData = sA.data;
+    const sAAddData = sAData?.props?.getAddAdvertiseData || {};
     results.attemptA_correct_fields = {
       status: sA.status,
+      component: sAData?.component,
+      errors: sAData?.props?.errors,
+      isCompleted: sAAddData.isCompleted,
+      addDataKeys: Object.keys(sAAddData),
+      prevDataStep: sAAddData.prevData?.step,
+      prevDataProductId: sAAddData.prevData?.productId,
+      adsSelectedData: sAAddData.adsSelectedData ? JSON.stringify(sAAddData.adsSelectedData).substring(0, 500) : null,
       redirectUrl: sA.headers?.['x-inertia-location'] || sA.headers?.location || 'none',
-      responseSnippet: sAStr,
+      url: sAData?.url,
     };
     updateCookies(sA);
 
