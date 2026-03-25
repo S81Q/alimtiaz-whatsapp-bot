@@ -22,7 +22,11 @@
 const axios = require('axios');
 const FormData = require('form-data');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { buildTitleAr, buildTitleEn, buildDescription } = require('./ad-builders');
+
+puppeteer.use(StealthPlugin());
 
 const BASE_URL = 'https://mzadqatar.com';
 const MZAD_RECAPTCHA_SITE_KEY = '6Lc-0vApAAAAAFu7_SOXa6yJIDgm6qAl9LY1vYVI';
@@ -122,85 +126,89 @@ async function solveRecaptchaV3(action = 'login') {
 }
 
 // ─────────────────────────────────────────────
-// Cloudflare challenge solving via Capsolver
+// Cloudflare bypass via Puppeteer + Stealth
+// Launches headless Chrome to solve CF JS challenge,
+// extracts cf_clearance cookie for reuse with axios.
 // ─────────────────────────────────────────────
-async function solveCloudflareChallenge(url) {
-  const apiKey = process.env.CAPSOLVER_API_KEY;
-  if (!apiKey) {
-    console.warn('[Mzad Capsolver] CAPSOLVER_API_KEY not set – cannot solve Cloudflare challenge');
-    return null;
+let cachedCfData = null; // { cookies, userAgent, timestamp }
+const CF_CLEARANCE_TTL = 15 * 60 * 1000; // 15 minutes
+
+async function getCfClearance(url, forceRefresh = false) {
+  // Return cached if still fresh
+  if (!forceRefresh && cachedCfData && (Date.now() - cachedCfData.timestamp) < CF_CLEARANCE_TTL) {
+    console.log('[Mzad CF] Using cached cf_clearance (age:', Math.round((Date.now() - cachedCfData.timestamp) / 1000), 's)');
+    return cachedCfData;
   }
 
-  const delay = ms => new Promise(r => setTimeout(r, ms));
-
+  console.log('[Mzad CF] Launching Puppeteer to solve Cloudflare challenge...');
+  let browser;
   try {
-    // First, get the challenge page HTML to extract any sitekey
-    const pageRes = await mzadAxios.get(url, {
-      headers: {
-        'Accept': 'text/html',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-      },
-      validateStatus: () => true,
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+      ],
+      ignoreDefaultArgs: ['--disable-extensions'],
     });
 
-    const html = String(pageRes.data);
-    // Check for Cloudflare Turnstile sitekey
-    const turnstileMatch = html.match(/data-sitekey="([^"]+)"/) || html.match(/sitekey['"]\s*:\s*['"]([^'"]+)/);
-    const siteKey = turnstileMatch ? turnstileMatch[1] : null;
+    const page = await browser.newPage();
+    const userAgent = await page.evaluate(() => navigator.userAgent);
+    console.log('[Mzad CF] Browser User-Agent:', userAgent);
 
-    console.log('[Mzad Capsolver] Challenge page status:', pageRes.status, '| Turnstile sitekey:', siteKey || 'not found');
+    // Navigate to the target URL
+    console.log('[Mzad CF] Navigating to', url);
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
-    // Collect cookies from the challenge page
-    const cfPageCookies = parseCookies(pageRes.headers['set-cookie']);
-    console.log('[Mzad Capsolver] Challenge page cookies:', Object.keys(cfPageCookies).join(', '));
-
-    if (siteKey) {
-      // Solve Cloudflare Turnstile via Capsolver
-      console.log('[Mzad Capsolver] Solving Cloudflare Turnstile...');
-      const createRes = await axios.post('https://api.capsolver.com/createTask', {
-        clientKey: apiKey,
-        task: {
-          type: 'AntiTurnstileTaskProxyLess',
-          websiteURL: url,
-          websiteKey: siteKey,
-        },
-      });
-
-      if (createRes.data.errorId !== 0) {
-        throw new Error('Capsolver create failed: ' + JSON.stringify(createRes.data));
+    // Wait for CF challenge to clear (look for the page to change from "Just a moment")
+    const maxWait = 20000;
+    const start = Date.now();
+    let resolved = false;
+    while (Date.now() - start < maxWait) {
+      const title = await page.title();
+      const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 200) || '');
+      if (!title.includes('Just a moment') && !bodyText.includes('Checking your browser')) {
+        resolved = true;
+        console.log('[Mzad CF] Challenge resolved! Page title:', title);
+        break;
       }
-
-      const taskId = createRes.data.taskId;
-      console.log('[Mzad Capsolver] Task created:', taskId);
-
-      for (let i = 0; i < 30; i++) {
-        await delay(3000);
-        const resultRes = await axios.post('https://api.capsolver.com/getTaskResult', {
-          clientKey: apiKey,
-          taskId,
-        });
-
-        if (resultRes.data.status === 'ready') {
-          console.log('[Mzad Capsolver] Turnstile solved!');
-          return {
-            token: resultRes.data.solution.token,
-            userAgent: resultRes.data.solution.userAgent || null,
-            cookies: cfPageCookies,
-          };
-        }
-        if (resultRes.data.errorId !== 0) {
-          throw new Error('Capsolver error: ' + JSON.stringify(resultRes.data));
-        }
-      }
-      throw new Error('Capsolver: Turnstile solve timeout');
+      console.log('[Mzad CF] Still on challenge page... (', Math.round((Date.now() - start) / 1000), 's)');
+      await new Promise(r => setTimeout(r, 2000));
     }
 
-    // No Turnstile sitekey found — return whatever cookies the challenge page gave us
-    console.log('[Mzad Capsolver] No Turnstile widget found. Returning challenge page cookies.');
-    return { token: null, userAgent: null, cookies: cfPageCookies };
+    if (!resolved) {
+      const finalTitle = await page.title();
+      console.warn('[Mzad CF] Challenge did NOT resolve after', maxWait / 1000, 's. Title:', finalTitle);
+    }
+
+    // Extract ALL cookies from the browser
+    const browserCookies = await page.cookies();
+    const cookieObj = {};
+    for (const c of browserCookies) {
+      cookieObj[c.name] = c.value;
+    }
+    console.log('[Mzad CF] Extracted cookies:', Object.keys(cookieObj).join(', '));
+    console.log('[Mzad CF] cf_clearance:', cookieObj['cf_clearance'] ? 'FOUND' : 'NOT FOUND');
+
+    cachedCfData = {
+      cookies: cookieObj,
+      userAgent,
+      timestamp: Date.now(),
+    };
+
+    return cachedCfData;
   } catch (e) {
-    console.error('[Mzad Capsolver] Error:', e.message);
+    console.error('[Mzad CF] Puppeteer error:', e.message);
     return null;
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch (e) { /* ignore */ }
+    }
   }
 }
 
@@ -240,13 +248,23 @@ function decodedXsrf(xsrf) {
 
 // ─────────────────────────────────────────────
 // Initial page fetch (get fresh CSRF + session)
+// Uses Puppeteer CF bypass if Cloudflare blocks
 // ─────────────────────────────────────────────
 async function getInitialCookies() {
   console.log('[Mzad] Fetching initial cookies from login page...');
+
+  // First try: get CF clearance via Puppeteer (proactive bypass)
+  const cfData = await getCfClearance(`${BASE_URL}/en/login`);
+  const cfUserAgent = cfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+  const cfCookieStr = cfData?.cookies
+    ? Object.entries(cfData.cookies).map(([k, v]) => `${k}=${v}`).join('; ')
+    : '';
+
   const res = await mzadAxios.get(`${BASE_URL}/en/login`, {
     headers: {
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': cfUserAgent,
+      ...(cfCookieStr ? { 'Cookie': cfCookieStr } : {}),
     },
     withCredentials: true,
     validateStatus: s => s < 500,
@@ -255,21 +273,22 @@ async function getInitialCookies() {
   const cookies = parseCookies(res.headers['set-cookie']);
   const csrfMeta = String(res.data).match(/name="csrf-token"\s+content="([^"]+)"/);
 
-  // Log all cookies received (including Cloudflare ones)
-  const cookieNames = Object.keys(cookies);
+  // Merge CF cookies with response cookies
+  const allCookies = { ...(cfData?.cookies || {}), ...cookies };
+  const cookieNames = Object.keys(allCookies);
   console.log('[Mzad] Initial GET status:', res.status, '| Cookies received:', cookieNames.join(', '));
 
-  // Check if we got a Cloudflare challenge instead of the real page
   const html = String(res.data);
   if (html.includes('Just a moment') || html.includes('cf-challenge') || res.status === 403) {
-    console.warn('[Mzad] Initial GET returned Cloudflare challenge! Status:', res.status);
+    console.warn('[Mzad] Initial GET STILL returned Cloudflare challenge after Puppeteer bypass! Status:', res.status);
   }
 
   return {
-    session: cookies['mzadqatar_session'] || '',
-    xsrf: cookies['XSRF-TOKEN'] || '',
-    csrf: csrfMeta ? csrfMeta[1] : decodedXsrf(cookies['XSRF-TOKEN'] || ''),
-    allCookies: cookies,  // Preserve ALL cookies including cf_clearance, __cf_bm
+    session: cookies['mzadqatar_session'] || allCookies['mzadqatar_session'] || '',
+    xsrf: cookies['XSRF-TOKEN'] || allCookies['XSRF-TOKEN'] || '',
+    csrf: csrfMeta ? csrfMeta[1] : decodedXsrf(cookies['XSRF-TOKEN'] || allCookies['XSRF-TOKEN'] || ''),
+    allCookies,
+    cfUserAgent,
   };
 }
 
@@ -279,13 +298,16 @@ async function getInitialCookies() {
 async function isSessionValid(session, xsrf) {
   if (!session || !xsrf) { console.log('[Mzad] isSessionValid: missing session or xsrf'); return false; }
   try {
+    const cfExtra = cachedCfData?.cookies || {};
+    const ua = cachedCfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
     const res = await mzadAxios.get(`${BASE_URL}/en/add_advertise`, {
       headers: {
-        'Cookie': buildCookieStr(session, xsrf),
+        'Cookie': buildCookieStr(session, xsrf, cfExtra),
         'X-Inertia': 'true',
         'X-Requested-With': 'XMLHttpRequest',
         'Accept': 'application/json',
         'X-Inertia-Version': '1',
+        'User-Agent': ua,
       },
       maxRedirects: 0,
       validateStatus: s => s < 500,
@@ -309,8 +331,9 @@ async function loginWithPassword() {
 
   // Step 1: Get fresh cookies (including Cloudflare cookies)
   const initial = await getInitialCookies();
-  let { session, xsrf, csrf, allCookies } = initial;
+  let { session, xsrf, csrf, allCookies, cfUserAgent } = initial;
   let extraCookies = { ...allCookies };
+  const ua = cfUserAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
 
   // Step 2: Solve reCAPTCHA v3
   const recaptchaToken = await solveRecaptchaV3('login');
@@ -330,7 +353,7 @@ async function loginWithPassword() {
       'Origin': BASE_URL,
       'Referer': `${BASE_URL}/en/login`,
       'Accept': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': ua,
     },
     maxRedirects: 0,
     validateStatus: s => s < 500,
@@ -365,10 +388,11 @@ async function loginWithOtp() {
   const { readOtpFromGmail } = require('./gmail-otp');
   const phone = process.env.MZAD_PHONE || '70297066';
 
-  // Step 1: Get fresh cookies (including Cloudflare cookies)
+  // Step 1: Get fresh cookies (including Cloudflare cookies via Puppeteer)
   const initial = await getInitialCookies();
-  let { session, xsrf, csrf, allCookies } = initial;
-  let extraCookies = { ...allCookies };  // Track all cookies for Cloudflare bypass
+  let { session, xsrf, csrf, allCookies, cfUserAgent } = initial;
+  let extraCookies = { ...allCookies };
+  const ua = cfUserAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
 
   // Step 2: Solve reCAPTCHA v3 for OTP request
   const recaptchaToken1 = await solveRecaptchaV3('login');
@@ -387,14 +411,14 @@ async function loginWithOtp() {
       'Origin': BASE_URL,
       'Referer': `${BASE_URL}/en/login`,
       'Accept': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': ua,
     },
     validateStatus: s => s < 500,
   });
 
   // Update ALL cookies from response
   const cookies2 = parseCookies(otpReqRes.headers['set-cookie']);
-  Object.assign(extraCookies, cookies2);  // Merge new cookies
+  Object.assign(extraCookies, cookies2);
   if (cookies2['mzadqatar_session']) session = cookies2['mzadqatar_session'];
   if (cookies2['XSRF-TOKEN']) xsrf = cookies2['XSRF-TOKEN'];
   csrf = decodedXsrf(xsrf);
@@ -403,14 +427,29 @@ async function loginWithOtp() {
   console.log('[Mzad] OTP request response body:', JSON.stringify(otpReqRes.data).substring(0, 500));
   console.log('[Mzad] OTP response cookies:', Object.keys(cookies2).join(', ') || 'none');
 
-  // If Cloudflare blocked us, try to solve the challenge
+  // If Cloudflare blocked us, force-refresh CF clearance and retry
   if (otpReqRes.status === 403 && String(otpReqRes.data).includes('Just a moment')) {
-    console.log('[Mzad] Cloudflare challenge detected! Attempting to solve via Capsolver...');
-    const cfResult = await solveCloudflareChallenge(`${BASE_URL}/en/login`);
+    console.log('[Mzad] Cloudflare challenge on POST! Force-refreshing CF clearance via Puppeteer...');
+    const cfResult = await getCfClearance(`${BASE_URL}/en/login`, true);
     if (cfResult) {
-      // Merge Cloudflare cookies and retry
       Object.assign(extraCookies, cfResult.cookies);
-      console.log('[Mzad] Cloudflare solved, retrying OTP request with cf cookies...');
+      // Re-fetch initial cookies with new CF clearance
+      const freshRes = await mzadAxios.get(`${BASE_URL}/en/login`, {
+        headers: {
+          'Accept': 'text/html',
+          'User-Agent': cfResult.userAgent,
+          'Cookie': Object.entries(extraCookies).map(([k, v]) => `${k}=${v}`).join('; '),
+        },
+        validateStatus: s => s < 500,
+      });
+      const freshCookies = parseCookies(freshRes.headers['set-cookie']);
+      Object.assign(extraCookies, freshCookies);
+      if (freshCookies['mzadqatar_session']) session = freshCookies['mzadqatar_session'];
+      if (freshCookies['XSRF-TOKEN']) xsrf = freshCookies['XSRF-TOKEN'];
+      const freshCsrfMeta = String(freshRes.data).match(/name="csrf-token"\s+content="([^"]+)"/);
+      csrf = freshCsrfMeta ? freshCsrfMeta[1] : decodedXsrf(xsrf);
+
+      console.log('[Mzad] Retrying OTP request with fresh CF cookies...');
       const retryRes = await mzadAxios.post(`${BASE_URL}/en/login`, otpBody, {
         headers: {
           'Content-Type': 'application/json',
@@ -420,7 +459,7 @@ async function loginWithOtp() {
           'Origin': BASE_URL,
           'Referer': `${BASE_URL}/en/login`,
           'Accept': 'application/json',
-          'User-Agent': cfResult.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+          'User-Agent': cfResult.userAgent,
         },
         validateStatus: s => s < 500,
       });
@@ -432,7 +471,7 @@ async function loginWithOtp() {
       console.log('[Mzad] Retry OTP request status:', retryRes.status);
       console.log('[Mzad] Retry response body:', JSON.stringify(retryRes.data).substring(0, 300));
     } else {
-      console.error('[Mzad] Could not solve Cloudflare challenge');
+      console.error('[Mzad] Could not get CF clearance via Puppeteer');
     }
   }
 
@@ -467,7 +506,7 @@ async function loginWithOtp() {
       'Origin': BASE_URL,
       'Referer': `${BASE_URL}/en/login`,
       'Accept': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': ua,
     },
     maxRedirects: 0,
     validateStatus: s => s < 500,
@@ -535,11 +574,13 @@ async function getSession() {
 // ─────────────────────────────────────────────
 async function getInertiaVersion(session, xsrf) {
   try {
+    const cfExtra = cachedCfData?.cookies || {};
+    const ua = cachedCfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
     const res = await mzadAxios.get(`${BASE_URL}/en/add_advertise`, {
       headers: {
-        'Cookie': buildCookieStr(session, xsrf),
+        'Cookie': buildCookieStr(session, xsrf, cfExtra),
         'Accept': 'text/html',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': ua,
       },
     });
     const html = String(res.data);
@@ -700,6 +741,14 @@ async function postAd(property, sessionData) {
     isResetImages: false,
   };
 
+  // Use CF user-agent if available from cached clearance
+  const ua = cachedCfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+
+  // Merge any cached CF cookies into extraCookies
+  if (cachedCfData?.cookies) {
+    Object.assign(extraCookies, cachedCfData.cookies);
+  }
+
   const commonHeaders = {
     'Content-Type': 'application/json',
     'X-Requested-With': 'XMLHttpRequest',
@@ -709,7 +758,7 @@ async function postAd(property, sessionData) {
     'Cookie': buildCookieStr(session, xsrf, extraCookies),
     'Origin': BASE_URL,
     'Referer': `${BASE_URL}/en/add_advertise`,
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': ua,
     'Accept': 'text/html, application/xhtml+xml',
   };
 
