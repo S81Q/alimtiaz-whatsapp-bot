@@ -817,12 +817,16 @@ async function postAd(property, sessionData) {
 
   const step3Res = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, fd, {
     headers: step3Headers,
-    validateStatus: s => s < 500,
+    validateStatus: s => s < 600,
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
   });
 
   console.log(`[Mzad] Ad submitted for unit ${property.Unit}. Status: ${step3Res.status}`);
+  if (step3Res.status >= 400) {
+    const respSnippet = typeof step3Res.data === 'string' ? step3Res.data.substring(0, 500) : JSON.stringify(step3Res.data)?.substring(0, 500);
+    console.log(`[Mzad] Step 3 response body:`, respSnippet);
+  }
 
   // If step 3 returns 500 with multipart, retry with JSON (no image) as fallback
   if (step3Res.status >= 400) {
@@ -833,6 +837,8 @@ async function postAd(property, sessionData) {
     }, { headers: { ...commonHeaders, 'Content-Type': 'application/json' }, validateStatus: s => s < 600 });
 
     console.log(`[Mzad] Step 3 JSON fallback status: ${step3JsonRes.status}`);
+    const fallbackSnippet = typeof step3JsonRes.data === 'string' ? step3JsonRes.data.substring(0, 500) : JSON.stringify(step3JsonRes.data)?.substring(0, 500);
+    console.log(`[Mzad] Step 3 JSON fallback body:`, fallbackSnippet);
 
     if (step3JsonRes.data?.props?.errors && Object.keys(step3JsonRes.data.props.errors).length > 0) {
       throw new Error('Mzad step 3 validation: ' + JSON.stringify(step3JsonRes.data.props.errors));
