@@ -522,6 +522,20 @@ app.get('/poster-status', (req, res) => {
 
 // ══════════════════════════════════════════════════════
 
+// Test Mzad login (CF bypass + auth)
+app.get('/test-mzad-login', async (req, res) => {
+  try {
+    const { getSession } = require('./mzad');
+    console.log('[test-mzad-login] Starting Mzad login test...');
+    const session = await getSession();
+    console.log('[test-mzad-login] Session result:', JSON.stringify(session ? { hasSession: true, keys: Object.keys(session) } : null));
+    res.json({ status: 'ok', session: session ? { hasSession: true, keys: Object.keys(session) } : null });
+  } catch (e) {
+    console.error('[test-mzad-login] Error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
