@@ -743,7 +743,7 @@ async function postAd(property, sessionData) {
     isResetImages: false,
     images: [],
     productId: null,
-    agree_commission: false,
+    agree_commission: true,
   };
 
   // Use CF user-agent if available from cached clearance
@@ -820,9 +820,9 @@ async function postAd(property, sessionData) {
 
   // ── Step 3: Submit ad content and publish ──
   console.log(`[Mzad] Step 3: Publishing ad for unit ${property.Unit}...`);
-  console.log(`[Mzad] Step 3 data:`, JSON.stringify({ step1Data, step2Data, step3Data, step: 3 }).substring(0, 500));
+  console.log(`[Mzad] Step 3 data:`, JSON.stringify({ step1Data, step2Data, step3Data, step: 3 }).substring(0, 800));
 
-  // Step 3: Try multipart with image first (primary approach)
+  // Step 3: Use multipart FormData with placeholder image (image is required for ad creation)
   console.log(`[Mzad] Step 3: Submitting ad with image (multipart)...`);
   const imageBuffer = generatePlaceholderImage();
   const step3WithImage = { ...step3Data, images: [imageBuffer] };
@@ -841,30 +841,18 @@ async function postAd(property, sessionData) {
   });
 
   console.log(`[Mzad] Step 3 multipart status: ${step3Res.status}`);
-  const respSnippet = typeof step3Res.data === 'string' ? step3Res.data.substring(0, 500) : JSON.stringify(step3Res.data)?.substring(0, 500);
-  console.log(`[Mzad] Step 3 response:`, respSnippet);
+
+  // Check response for ad creation success
+  const s3Props = step3Res.data?.props || {};
+  const s3AddData = s3Props.getAddAdvertiseData || {};
+  console.log(`[Mzad] Step 3 isCompleted:`, s3AddData.isCompleted);
+  console.log(`[Mzad] Step 3 errors:`, JSON.stringify(s3Props.errors || {}));
+  console.log(`[Mzad] Step 3 prevData:`, JSON.stringify(s3AddData.prevData || {}).substring(0, 300));
 
   if (step3Res.status >= 500) {
-    // Try JSON without image as fallback
-    console.log(`[Mzad] Step 3 multipart failed (${step3Res.status}), trying JSON without image...`);
-    const step3JsonRes = await mzadAxios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data, step: 3,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-
-    console.log(`[Mzad] Step 3 JSON status: ${step3JsonRes.status}`);
-    const jsonSnippet = typeof step3JsonRes.data === 'string' ? step3JsonRes.data.substring(0, 500) : JSON.stringify(step3JsonRes.data)?.substring(0, 500);
-    console.log(`[Mzad] Step 3 JSON response:`, jsonSnippet);
-
-    if (step3JsonRes.status >= 500) {
-      throw new Error(`Mzad step 3 server error: multipart=${step3Res.status}, JSON=${step3JsonRes.status}`);
-    }
-    if (step3JsonRes.status >= 400) {
-      throw new Error(`Mzad step 3 error: status ${step3JsonRes.status}`);
-    }
-    if (step3JsonRes.data?.props?.errors && Object.keys(step3JsonRes.data.props.errors).length > 0) {
-      throw new Error('Mzad step 3 validation: ' + JSON.stringify(step3JsonRes.data.props.errors));
-    }
-    return step3JsonRes.data;
+    const snippet = typeof step3Res.data === 'string' ? step3Res.data.substring(0, 300) : JSON.stringify(step3Res.data)?.substring(0, 300);
+    console.log(`[Mzad] Step 3 error response:`, snippet);
+    throw new Error(`Mzad step 3 server error: ${step3Res.status}`);
   }
 
   if (step3Res.status >= 400) {
@@ -872,8 +860,8 @@ async function postAd(property, sessionData) {
   }
 
   // Check for validation errors
-  if (step3Res.data?.props?.errors && Object.keys(step3Res.data.props.errors).length > 0) {
-    throw new Error('Mzad step 3 validation: ' + JSON.stringify(step3Res.data.props.errors));
+  if (s3Props.errors && Object.keys(s3Props.errors).length > 0) {
+    throw new Error('Mzad step 3 validation: ' + JSON.stringify(s3Props.errors));
   }
 
   return step3Res.data;
