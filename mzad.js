@@ -38,7 +38,7 @@ const mzadAxios = axios;
 // ─────────────────────────────────────────────
 // Category mapping (from mzadqatar.com Inertia props)
 // Residential Properties for Rent = categoryId 8494
-// Commercial Properties for Rent  = categoryId 8493
+// Commercial Properties for Rent  = categoryId 14897
 // ─────────────────────────────────────────────
 function isCommercialType(type) {
   const lower = (type || '').toLowerCase();
@@ -668,7 +668,7 @@ async function postAd(property, sessionData) {
   const inertiaVersion = await getInertiaVersion(session, xsrf);
 
   // Determine category ID
-  const categoryId = isComm ? 8493 : 8494; // Commercial=8493, Residential=8494
+  const categoryId = isComm ? 14897 : 8494; // Commercial=14897, Residential=8494
 
   // Build step data using correct mzadqatar.com field IDs
   const step1Data = {
@@ -682,7 +682,7 @@ async function postAd(property, sessionData) {
   const bathrooms = String(parseInt(property.Bathrooms) || 2);
   const area = parseInt(property.Size_sqm) || 100;
   const floor = String(parseInt(property.Floor) || 1);
-  const price = parseInt(property.Rent_QAR) || 0;
+  const price = parseInt(property.Rent_QAR) || 1000; // Default to 1000 QAR if not set
 
   // Determine subcategory based on property type
   let subCategoryId = MZAD_VALUES.subcategory['Apartments']; // Default
@@ -716,21 +716,34 @@ async function postAd(property, sessionData) {
 
   const desc = buildDescription(property);
   const titleEn = buildTitleEn(property);
-  // Mzad title max 33 chars
-  const title = titleEn.substring(0, 33);
+  const titleAr = buildTitleAr(property);
 
-  // Use ASCII-safe title to avoid encoding issues
-  const safeTitle = title.replace(/[^\x00-\x7F]/g, '').trim().substring(0, 33);
-  const finalTitle = safeTitle || `${property.Type || 'Property'} For Rent`;
+  // Mzad uses productName fields (max ~100 chars)
+  const productNameEnglish = titleEn.substring(0, 100);
+  const productNameArabic = titleAr.substring(0, 100);
 
+  // Clean description - remove emojis and box-drawing chars
+  const safeDesc = desc
+    .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')  // Remove emojis
+    .replace(/[━─═╔╗╚╝║│┌┐└┘├┤┬┴┼]/g, '-')  // Replace box-drawing
+    .replace(/\n{3,}/g, '\n\n')               // Normalize newlines
+    .substring(0, 1500);
+
+  // Mzad uses productDescription* and productName* fields (NOT title/description/price)
   const step3Data = {
-    title: finalTitle,
-    description: desc.substring(0, 700),
-    price,
+    productNameEnglish,
+    productNameArabic,
+    productNameArEn: productNameEnglish,       // Bilingual fallback
+    productDescriptionEnglish: safeDesc,
+    productDescriptionArabic: safeDesc,
+    productDescriptionArEn: safeDesc,          // Bilingual fallback
+    productPrice: price,
     autoRenew: false,
     currencyId: 1,  // QAR
     isResetImages: false,
-    images: [],  // Empty array — server may require the field to exist
+    images: [],
+    productId: null,
+    agree_commission: false,
   };
 
   // Use CF user-agent if available from cached clearance

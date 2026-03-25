@@ -663,108 +663,35 @@ app.get('/debug-mzad-steps', async (req, res) => {
 
     const results = {};
 
-    // Attempt A: Minimal step3 - just price, no title/desc/images
+    // Attempt A: Correct field names (productName*, productDescription*, productPrice)
     updateCookies(s2);
+    const correctStep3 = {
+      productNameEnglish: 'Apartment For Rent Doha',
+      productNameArabic: 'شقة للإيجار الدوحة',
+      productNameArEn: 'Apartment For Rent Doha',
+      productDescriptionEnglish: 'Nice 2BR apartment for rent in Doha Qatar. Fully finished. Contact us for viewing.',
+      productDescriptionArabic: 'شقة للإيجار في الدوحة قطر. غرفتين نوم.',
+      productDescriptionArEn: 'Nice 2BR apartment for rent in Doha Qatar. Fully finished. Contact us for viewing.',
+      productPrice: 5000,
+      autoRenew: false,
+      currencyId: 1,
+      isResetImages: false,
+      images: [],
+      productId: null,
+      agree_commission: false,
+    };
+
     const sA = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data: { price: 5000, autoRenew: false, currencyId: 1, isResetImages: false }, step: 3,
+      step1Data, step2Data, step3Data: correctStep3, step: 3,
     }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    results.attemptA_minimal = { status: sA.status, isHTML: typeof sA.data === 'string' && sA.data.includes('<!DOCTYPE'), data: typeof sA.data === 'object' ? sA.data : undefined, errors: sA.data?.props?.errors };
+    results.attemptA_correct_fields = {
+      status: sA.status,
+      isHTML: typeof sA.data === 'string' && sA.data.includes('<!DOCTYPE'),
+      errors: sA.data?.props?.errors,
+      propsKeys: sA.data?.props ? Object.keys(sA.data.props) : undefined,
+      data: typeof sA.data === 'string' ? sA.data.substring(0, 300) : undefined,
+    };
     updateCookies(sA);
-
-    // Re-do steps 1 and 2 to reset state (the failed step 3 may have corrupted session)
-    const s1b = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    updateCookies(s1b);
-    const s2b = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    updateCookies(s2b);
-
-    // Attempt B: With title/desc in step3
-    const sB = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data: {
-        title: 'Apartment For Rent Doha',
-        description: 'Nice apartment for rent in Doha.',
-        price: 5000, autoRenew: false, currencyId: 1, isResetImages: false, images: [],
-      }, step: 3,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    results.attemptB_with_title = { status: sB.status, isHTML: typeof sB.data === 'string' && sB.data.includes('<!DOCTYPE'), errors: sB.data?.props?.errors };
-    updateCookies(sB);
-
-    // Re-do steps 1+2
-    const s1c = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    updateCookies(s1c);
-    const s2c = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    updateCookies(s2c);
-
-    // Attempt C: Remove X-Inertia headers, try as plain JSON
-    const plainHeaders = { ...commonHeaders };
-    delete plainHeaders['X-Inertia'];
-    delete plainHeaders['X-Inertia-Version'];
-    plainHeaders['Accept'] = 'application/json';
-    const sC = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data: {
-        title: 'Apartment For Rent Doha',
-        description: 'Nice apartment for rent.',
-        price: 5000, autoRenew: false, currencyId: 1, isResetImages: false,
-      }, step: 3,
-    }, { headers: plainHeaders, validateStatus: s => s < 600 });
-    results.attemptC_no_inertia = { status: sC.status, isHTML: typeof sC.data === 'string' && sC.data.includes('<!DOCTYPE'), data: typeof sC.data === 'string' ? sC.data.substring(0, 500) : sC.data };
-    updateCookies(sC);
-
-    // Re-do steps 1+2 for attempt D
-    const s1d = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    updateCookies(s1d);
-    const s2d = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-    updateCookies(s2d);
-
-    // Attempt D: Use FormData multipart (like browser file upload)
-    const FormData = require('form-data');
-    const fd = new FormData();
-    fd.append('step1Data[categoryId]', '8494');
-    fd.append('step1Data[lang]', 'en');
-    fd.append('step1Data[mzadyUserNumber]', '');
-    fd.append('step2Data[cityId]', '3');
-    fd.append('step2Data[regionId]', '30');
-    fd.append('step2Data[numberOfRooms]', '2');
-    fd.append('step2Data[location]', '');
-    fd.append('step2Data[categoryAdvertiseTypeId]', '3');
-    fd.append('step2Data[furnishedTypeId]', '107');
-    fd.append('step2Data[properterylevel]', '346');
-    fd.append('step2Data[lands_area]', '100');
-    fd.append('step2Data[properteryfinishing]', '366');
-    fd.append('step2Data[properterybathrooms]', '358');
-    fd.append('step2Data[salesref]', 'DEBUG-1');
-    fd.append('step2Data[rentaltype]', '791');
-    fd.append('step2Data[subCategoryId]', '88');
-    fd.append('step3Data[title]', 'Apartment For Rent Doha');
-    fd.append('step3Data[description]', 'Nice apartment for rent.');
-    fd.append('step3Data[price]', '5000');
-    fd.append('step3Data[autoRenew]', '0');
-    fd.append('step3Data[currencyId]', '1');
-    fd.append('step3Data[isResetImages]', '0');
-    fd.append('step', '3');
-
-    const fdHeaders = { ...commonHeaders };
-    delete fdHeaders['Content-Type'];
-    Object.assign(fdHeaders, fd.getHeaders());
-
-    const sD = await axios.post(`${BASE_URL}/en/add_advertise`, fd, {
-      headers: fdHeaders,
-      validateStatus: s => s < 600,
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-    });
-    results.attemptD_formdata = { status: sD.status, isHTML: typeof sD.data === 'string' && sD.data.includes('<!DOCTYPE'), data: typeof sD.data === 'string' ? sD.data.substring(0, 500) : sD.data };
 
     res.json({
       step1: { status: s1.status },
