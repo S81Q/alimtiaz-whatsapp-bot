@@ -719,6 +719,56 @@ app.get('/debug-mzad-steps', async (req, res) => {
   }
 });
 
+// Check if ad was posted by viewing user's ads via bot session
+app.get('/check-my-ads', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const axios = require('axios');
+    const session = await mzad.getSession();
+    if (!session) return res.status(500).json({ error: 'No session' });
+
+    const { session: sess, xsrf, csrfToken, extraCookies } = session;
+    const cookies = [`mzadqatar_session=${sess}`, `XSRF-TOKEN=${xsrf}`];
+    if (extraCookies) {
+      for (const [k, v] of Object.entries(extraCookies)) cookies.push(`${k}=${v}`);
+    }
+
+    const headers = {
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-Inertia': 'true',
+      'X-Inertia-Version': '',
+      'Cookie': cookies.join('; '),
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html, application/xhtml+xml',
+    };
+
+    const r = await axios.get('https://mzadqatar.com/en/user/profile/myads', {
+      headers,
+      validateStatus: s => s < 600,
+    });
+
+    const props = r.data?.props || {};
+    const userData = props.classifiedUserData;
+    const myAds = props.myProductsData;
+
+    res.json({
+      status: r.status,
+      userName: userData?.name || userData?.phone,
+      adsCount: myAds?.data?.length || myAds?.total || 0,
+      ads: myAds?.data?.slice(0, 5).map(a => ({
+        id: a.productId || a.id,
+        title: a.productName || a.productNameEnglish || a.title,
+        price: a.productPrice || a.price,
+        status: a.status,
+        createdAt: a.created_at || a.createdAt,
+        url: a.productUrl || a.url,
+      })) || [],
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
