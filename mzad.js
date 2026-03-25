@@ -21,7 +21,6 @@
 
 const axios = require('axios');
 const FormData = require('form-data');
-const { HttpsProxyAgent } = require('https-proxy-agent');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { buildTitleAr, buildTitleEn, buildDescription } = require('./ad-builders');
@@ -31,22 +30,10 @@ puppeteer.use(StealthPlugin());
 const BASE_URL = 'https://mzadqatar.com';
 const MZAD_RECAPTCHA_SITE_KEY = '6Lc-0vApAAAAAFu7_SOXa6yJIDgm6qAl9LY1vYVI';
 
-// ─────────────────────────────────────────────
-// Proxy-enabled axios instance for mzadqatar.com
-// Set PROXY_URL env var (e.g. http://user:pass@host:port)
-// Required because Railway IPs are blocked by Cloudflare
-// ─────────────────────────────────────────────
-function getMzadAxios() {
-  const proxyUrl = process.env.PROXY_URL;
-  if (proxyUrl) {
-    console.log('[Mzad] Using proxy for mzadqatar.com requests:', proxyUrl.replace(/\/\/.*@/, '//***@'));
-    const agent = new HttpsProxyAgent(proxyUrl);
-    return axios.create({ httpsAgent: agent, httpAgent: agent, proxy: false });
-  }
-  console.log('[Mzad] WARNING: No PROXY_URL set. Railway IPs may be blocked by Cloudflare.');
-  return axios;
-}
-const mzadAxios = getMzadAxios();
+// Use plain axios for mzadqatar.com requests.
+// Cloudflare bypass is handled by Puppeteer (getCfClearance) which
+// obtains cf_clearance cookies on Railway's IP, enabling axios requests.
+const mzadAxios = axios;
 
 // ─────────────────────────────────────────────
 // Category mapping (from mzadqatar.com Inertia props)
