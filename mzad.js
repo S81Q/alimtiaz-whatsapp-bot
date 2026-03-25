@@ -765,21 +765,83 @@ async function postAd(property, sessionData) {
     }
     await page.setCookie(...cookiesToSet);
 
-    // Navigate to add_advertise (also gets past Cloudflare)
+    // First navigate to base URL to solve any Cloudflare challenge
+    console.log(`[Mzad] Navigating to base URL for CF bypass...`);
+    await page.goto(`${BASE_URL}/en`, { waitUntil: 'networkidle2', timeout: 60000 });
+
+    // Wait for CF challenge to resolve
+    const startCf = Date.now();
+    while (Date.now() - startCf < 25000) {
+      const title = await page.title();
+      if (!title.includes('Just a moment')) break;
+      console.log(`[Mzad] CF challenge in progress...`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Now set session cookies again (CF may have overwritten some)
+    await page.setCookie(...cookiesToSet);
+
+    // Navigate to add_advertise
     console.log(`[Mzad] Navigating to add_advertise...`);
     await page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // Wait for CF challenge if present
+    // Wait again for CF if needed
     const pageTitle = await page.title();
     if (pageTitle.includes('Just a moment')) {
-      console.log(`[Mzad] Cloudflare challenge, waiting...`);
+      console.log(`[Mzad] Cloudflare challenge on add_advertise, waiting...`);
       await page.waitForFunction(() => !document.title.includes('Just a moment'), { timeout: 30000 });
     }
 
     // Check if on login page (session expired)
     const currentUrl = page.url();
+    console.log(`[Mzad] Current URL after navigation: ${currentUrl}`);
     if (currentUrl.includes('/login')) {
-      throw new Error('Mzad: Session expired — redirected to login');
+      // Try re-logging in via Puppeteer directly
+      console.log(`[Mzad] Redirected to login — session invalid in this browser. Trying password login in-browser...`);
+      const password = process.env.MZAD_PASSWORD;
+      const phone = process.env.MZAD_PHONE || '70297066';
+      if (password) {
+        // Extract CSRF token from login page
+        const loginCsrf = await page.evaluate(() => {
+          const meta = document.querySelector('meta[name="csrf-token"]');
+          return meta ? meta.content : '';
+        });
+        const loginXsrf = await page.evaluate(() => {
+          const c = document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='));
+          return c ? decodeURIComponent(c.split('=').slice(1).join('=').trim()) : '';
+        });
+
+        // Submit login via fetch in browser
+        const loginResult = await page.evaluate(async (phone, password, csrf) => {
+          const xsrf = document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='));
+          const token = xsrf ? decodeURIComponent(xsrf.split('=').slice(1).join('=').trim()) : csrf;
+          const res = await fetch('/en/login', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-XSRF-TOKEN': token,
+              'X-Requested-With': 'XMLHttpRequest',
+              'X-Inertia': 'true',
+              'Accept': 'text/html, application/xhtml+xml',
+            },
+            body: JSON.stringify({ phone, password, recaptchaToken: 'browser-login' }),
+            credentials: 'same-origin',
+          });
+          return { status: res.status, url: res.url };
+        }, phone, password, loginCsrf);
+
+        console.log(`[Mzad] In-browser login result: status=${loginResult.status}`);
+
+        // Navigate to add_advertise again
+        await page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 60000 });
+        const newUrl = page.url();
+        if (newUrl.includes('/login')) {
+          throw new Error('Mzad: Session expired — in-browser login also failed');
+        }
+        console.log(`[Mzad] In-browser login successful, now on: ${newUrl}`);
+      } else {
+        throw new Error('Mzad: Session expired — redirected to login');
+      }
     }
 
     // Extract Inertia page data and XSRF token from browser
