@@ -641,48 +641,130 @@ app.get('/debug-mzad-steps', async (req, res) => {
     const s2Props = s2.data?.props || {};
     const s2PropsKeys = Object.keys(s2Props);
 
-    // Step 3 attempt - minimal JSON
-    const step3Data = {
-      title: 'Apartment For Rent Doha',
-      description: 'Nice apartment for rent in Doha Qatar. 2 bedrooms, fully finished. Contact us for viewing.',
-      price: 5000,
-      autoRenew: false,
-      currencyId: 1,
-      isResetImages: false,
-      images: [],
-    };
+    // Get apiData from step 2 response to understand form structure
+    const apiData = s2Props.getAddAdvertiseData?.apiData;
+    const apiDataSummary = apiData ? JSON.stringify(apiData).substring(0, 2000) : 'N/A';
 
-    const s3 = await axios.post(`${BASE_URL}/en/add_advertise`, {
-      step1Data, step2Data, step3Data, step: 3,
-    }, { headers: commonHeaders, validateStatus: s => s < 600 });
-
-    // Update cookies and try with acceptTerms if first attempt failed
-    let s3b = null;
-    if (s3.status >= 400) {
-      const sc3 = s3.headers['set-cookie'] || [];
-      for (const c of sc3) {
+    // Helper to update cookies after each request
+    function updateCookies(response) {
+      const sc = response.headers['set-cookie'] || [];
+      for (const c of sc) {
         const m = c.match(/XSRF-TOKEN=([^;]+)/);
         if (m) commonHeaders['X-XSRF-TOKEN'] = decodeURIComponent(m[1]);
         const parts = c.split(';')[0].split('=');
-        if (parts[0] === 'XSRF-TOKEN' || parts[0] === 'mzadqatar_session') {
+        if (['XSRF-TOKEN', 'mzadqatar_session'].includes(parts[0])) {
           const idx = newCookies.findIndex(ck => ck.startsWith(parts[0] + '='));
           if (idx >= 0) newCookies[idx] = c.split(';')[0];
           else newCookies.push(c.split(';')[0]);
         }
       }
       commonHeaders['Cookie'] = newCookies.join('; ');
-
-      // Try with acceptTerms and title/description in step2Data
-      const step2DataV2 = { ...step2Data, title: 'Apartment For Rent Doha', description: 'Nice apartment for rent in Doha. 2BR. Contact us.' };
-      const step3DataV2 = { price: 5000, autoRenew: false, currencyId: 1, isResetImages: false, images: [], acceptTerms: true };
-
-      s3b = await axios.post(`${BASE_URL}/en/add_advertise`, {
-        step1Data, step2Data: step2DataV2, step3Data: step3DataV2, step: 3,
-      }, { headers: commonHeaders, validateStatus: s => s < 600 });
     }
 
-    const s3Data = typeof s3.data === 'string' ? s3.data.substring(0, 1000) : s3.data;
-    const s3bData = s3b ? (typeof s3b.data === 'string' ? s3b.data.substring(0, 1000) : s3b.data) : null;
+    const results = {};
+
+    // Attempt A: Minimal step3 - just price, no title/desc/images
+    updateCookies(s2);
+    const sA = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data: { price: 5000, autoRenew: false, currencyId: 1, isResetImages: false }, step: 3,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    results.attemptA_minimal = { status: sA.status, isHTML: typeof sA.data === 'string' && sA.data.includes('<!DOCTYPE'), data: typeof sA.data === 'object' ? sA.data : undefined, errors: sA.data?.props?.errors };
+    updateCookies(sA);
+
+    // Re-do steps 1 and 2 to reset state (the failed step 3 may have corrupted session)
+    const s1b = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    updateCookies(s1b);
+    const s2b = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    updateCookies(s2b);
+
+    // Attempt B: With title/desc in step3
+    const sB = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data: {
+        title: 'Apartment For Rent Doha',
+        description: 'Nice apartment for rent in Doha.',
+        price: 5000, autoRenew: false, currencyId: 1, isResetImages: false, images: [],
+      }, step: 3,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    results.attemptB_with_title = { status: sB.status, isHTML: typeof sB.data === 'string' && sB.data.includes('<!DOCTYPE'), errors: sB.data?.props?.errors };
+    updateCookies(sB);
+
+    // Re-do steps 1+2
+    const s1c = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    updateCookies(s1c);
+    const s2c = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    updateCookies(s2c);
+
+    // Attempt C: Remove X-Inertia headers, try as plain JSON
+    const plainHeaders = { ...commonHeaders };
+    delete plainHeaders['X-Inertia'];
+    delete plainHeaders['X-Inertia-Version'];
+    plainHeaders['Accept'] = 'application/json';
+    const sC = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data: {
+        title: 'Apartment For Rent Doha',
+        description: 'Nice apartment for rent.',
+        price: 5000, autoRenew: false, currencyId: 1, isResetImages: false,
+      }, step: 3,
+    }, { headers: plainHeaders, validateStatus: s => s < 600 });
+    results.attemptC_no_inertia = { status: sC.status, isHTML: typeof sC.data === 'string' && sC.data.includes('<!DOCTYPE'), data: typeof sC.data === 'string' ? sC.data.substring(0, 500) : sC.data };
+    updateCookies(sC);
+
+    // Re-do steps 1+2 for attempt D
+    const s1d = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data: {}, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 1,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    updateCookies(s1d);
+    const s2d = await axios.post(`${BASE_URL}/en/add_advertise`, {
+      step1Data, step2Data, step3Data: { autoRenew: false, currencyId: 1, isResetImages: false }, step: 2,
+    }, { headers: commonHeaders, validateStatus: s => s < 600 });
+    updateCookies(s2d);
+
+    // Attempt D: Use FormData multipart (like browser file upload)
+    const FormData = require('form-data');
+    const fd = new FormData();
+    fd.append('step1Data[categoryId]', '8494');
+    fd.append('step1Data[lang]', 'en');
+    fd.append('step1Data[mzadyUserNumber]', '');
+    fd.append('step2Data[cityId]', '3');
+    fd.append('step2Data[regionId]', '30');
+    fd.append('step2Data[numberOfRooms]', '2');
+    fd.append('step2Data[location]', '');
+    fd.append('step2Data[categoryAdvertiseTypeId]', '3');
+    fd.append('step2Data[furnishedTypeId]', '107');
+    fd.append('step2Data[properterylevel]', '346');
+    fd.append('step2Data[lands_area]', '100');
+    fd.append('step2Data[properteryfinishing]', '366');
+    fd.append('step2Data[properterybathrooms]', '358');
+    fd.append('step2Data[salesref]', 'DEBUG-1');
+    fd.append('step2Data[rentaltype]', '791');
+    fd.append('step2Data[subCategoryId]', '88');
+    fd.append('step3Data[title]', 'Apartment For Rent Doha');
+    fd.append('step3Data[description]', 'Nice apartment for rent.');
+    fd.append('step3Data[price]', '5000');
+    fd.append('step3Data[autoRenew]', '0');
+    fd.append('step3Data[currencyId]', '1');
+    fd.append('step3Data[isResetImages]', '0');
+    fd.append('step', '3');
+
+    const fdHeaders = { ...commonHeaders };
+    delete fdHeaders['Content-Type'];
+    Object.assign(fdHeaders, fd.getHeaders());
+
+    const sD = await axios.post(`${BASE_URL}/en/add_advertise`, fd, {
+      headers: fdHeaders,
+      validateStatus: s => s < 600,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
+    results.attemptD_formdata = { status: sD.status, isHTML: typeof sD.data === 'string' && sD.data.includes('<!DOCTYPE'), data: typeof sD.data === 'string' ? sD.data.substring(0, 500) : sD.data };
 
     res.json({
       step1: { status: s1.status },
@@ -695,9 +777,9 @@ app.get('/debug-mzad-steps', async (req, res) => {
           prevData: s2Props.getAddAdvertiseData.prevData,
           isCompleted: s2Props.getAddAdvertiseData.isCompleted,
         } : null,
+        apiDataSummary,
       },
-      step3_attempt1: { status: s3.status, data: s3Data },
-      step3_attempt2: s3b ? { status: s3b.status, data: s3bData } : 'skipped',
+      results,
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
