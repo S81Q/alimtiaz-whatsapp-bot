@@ -577,17 +577,29 @@ async function getInertiaVersion(session, xsrf) {
         'Accept': 'text/html',
         'User-Agent': ua,
       },
+      maxRedirects: 5,
+      validateStatus: s => s < 500,
     });
     const html = String(res.data);
+    const finalUrl = res.request?.res?.responseUrl || res.config?.url || '';
+    console.log(`[Mzad] getInertiaVersion: status=${res.status}, url=${finalUrl}, html_len=${html.length}`);
+
+    // Check if redirected to login
+    if (finalUrl.includes('/login') || html.includes('Log In')) {
+      console.warn('[Mzad] getInertiaVersion: redirected to login — session not valid!');
+      return { version: '', authenticated: false };
+    }
+
     const dataPageMatch = html.match(/data-page="([^"]+)"/);
     if (dataPageMatch) {
       const pageData = JSON.parse(dataPageMatch[1].replace(/&quot;/g, '"'));
-      return pageData.version || '';
+      console.log(`[Mzad] getInertiaVersion: version=${pageData.version}, component=${pageData.component}`);
+      return { version: pageData.version || '', authenticated: true };
     }
-    return '';
+    return { version: '', authenticated: true };
   } catch (e) {
     console.warn('[Mzad] Could not fetch Inertia version:', e.message);
-    return '';
+    return { version: '', authenticated: false };
   }
 }
 
@@ -737,26 +749,38 @@ async function postAd(property, sessionData) {
 
   console.log(`[Mzad] postAd for unit ${property.Unit} (lang=${step1Data.lang})...`);
 
-  // Ensure CF clearance is available (getSession may skip this if stored session is valid)
-  if (!cachedCfData) {
-    console.log(`[Mzad] No CF clearance cached — getting it now...`);
-    await getCfClearance(`${BASE_URL}/en/add_advertise`);
-  }
-
+  // Use CF clearance if available, but don't launch Puppeteer just for this
+  // (CF clearance is obtained during login; session validation works without it)
   const cfExtra = cachedCfData?.cookies || {};
   const ua = cachedCfData?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
   const allExtra = { ...cfExtra, ...(extraCookies || {}) };
 
   console.log(`[Mzad] CF cookies: ${Object.keys(cfExtra).join(', ') || 'none'}`);
-  console.log(`[Mzad] Extra cookies: ${Object.keys(extraCookies || {}).join(', ') || 'none'}`);
+  console.log(`[Mzad] Session cookie: ${session?.substring(0, 20)}...`);
 
-  // Get the Inertia version from the page
-  const version = await getInertiaVersion(session, xsrf);
-  console.log(`[Mzad] Inertia version: ${version || '(empty)'}`);
+  // Get the Inertia version from the page (also checks if session is truly valid)
+  let versionInfo = await getInertiaVersion(session, xsrf);
+  if (!versionInfo.authenticated) {
+    console.warn('[Mzad] Session not authenticated for add_advertise page — forcing re-login...');
+    // Force fresh login
+    delete process.env.MZAD_SESSION;
+    delete process.env.MZAD_XSRF_TOKEN;
+    const newSession = await getSession();
+    // Update our local variables
+    Object.assign(sessionData, newSession);
+    versionInfo = await getInertiaVersion(newSession.session, newSession.xsrf);
+    if (!versionInfo.authenticated) {
+      return { success: false, error: 'Session not authenticated even after re-login' };
+    }
+    // Update cookies with new session
+    Object.assign(allExtra, { ...(cachedCfData?.cookies || {}), ...(newSession.extraCookies || {}) });
+  }
+  const version = versionInfo.version;
+  console.log(`[Mzad] Inertia version: ${version || '(empty)'}, authenticated: ${versionInfo.authenticated}`);
 
   // Helper: submit a step via axios (Inertia POST)
-  let currentSession = session;
-  let currentXsrf = xsrf;
+  let currentSession = sessionData.session || session;
+  let currentXsrf = sessionData.xsrf || xsrf;
 
   async function submitStep(stepData, stepNum) {
     const cookieStr = buildCookieStr(currentSession, currentXsrf, allExtra);
