@@ -701,7 +701,12 @@ async function postAd(property, sessionData) {
       fd.append('step3Data[currencyId]', String(curId || 1));
       fd.append('step3Data[isResetImages]', '0');
       fd.append('step3Data[productId]', '');
-      fd.append('step3Data[images][]', blob, 'property.jpg');
+      // Inertia objectToFormData sends images as nested objects:
+      // step3Data[images][0][id], [type], [url], [tempFile]
+      fd.append('step3Data[images][0][id]', '0');
+      fd.append('step3Data[images][0][type]', 'image/jpeg');
+      fd.append('step3Data[images][0][url]', '');
+      fd.append('step3Data[images][0][tempFile]', blob, 'property.jpg');
 
       const res = await fetch(url, {
         method: 'POST',
@@ -733,7 +738,11 @@ async function postAd(property, sessionData) {
     form.append('step3Data[productDescriptionArabic]', desc);
     form.append('step3Data[autoRenew]', '0');
     form.append('step3Data[agree_commission]', '1');
-    form.append('step3Data[images][]', fs.createReadStream(imagePath), {
+    // Inertia nested object format for images
+    form.append('step3Data[images][0][id]', '0');
+    form.append('step3Data[images][0][type]', 'image/jpeg');
+    form.append('step3Data[images][0][url]', '');
+    form.append('step3Data[images][0][tempFile]', fs.createReadStream(imagePath), {
       filename: 'property.jpg', contentType: 'image/jpeg',
     });
     const axiosRes = await axios.post(`${BASE_URL}/en/add_advertise`, form, {
