@@ -704,7 +704,7 @@ async function postAd(property, sessionData) {
         if (value === null || value === undefined) {
           fd.append(key, '');
         } else if (value instanceof Blob || value instanceof File) {
-          fd.append(key, value);
+          fd.append(key, value, value.name || 'property.jpg');
         } else if (typeof value === 'object' && !Array.isArray(value)) {
           for (const [k, v] of Object.entries(value)) {
             appendFormData(fd, key + '[' + k + ']', v);
