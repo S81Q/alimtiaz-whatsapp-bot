@@ -329,6 +329,7 @@ async function loginWithOtp() {
     recaptchaToken1 = await solveRecaptchaV3('login');
   }
 
+  const otpRequestTime = Date.now() - 60000; // 60s buffer for clock skew
   // ── Step B: Send OTP via browser fetch ──
   console.log('[Mzad] Sending OTP request for phone:', phone);
   const otpRes = await page.evaluate(async (baseUrl, ph, token, csrfToken, ver) => {
@@ -368,7 +369,6 @@ async function loginWithOtp() {
   }
 
   // ── Step C: Wait for OTP and read from Gmail ──
-  const otpRequestTime = Date.now();
   console.log('[Mzad] Waiting 5s for OTP delivery...');
   await delay(5000);
   const otp = await readOtpFromGmail('mzad', 8, 5000, otpRequestTime);
