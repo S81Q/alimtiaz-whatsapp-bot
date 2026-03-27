@@ -199,8 +199,10 @@ async function loginWithOtp() {
     headers: {
       'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true', 'Cookie': buildCookieStr(session, xsrf),
-      'Origin': BASE_URL, 'Referer': `${BASE_URL}/en/login`, 'Accept': 'application/json',
+      'Origin': BASE_URL, 'Referer': `${BASE_URL}/en/login`,
+      'Accept': 'text/html, application/xhtml+xml',
       'X-XSRF-TOKEN': csrf,
+      'X-Inertia-Version': '',
     },
     validateStatus: s => s < 500,
   });
@@ -235,7 +237,19 @@ async function loginWithOtp() {
   const finalXsrf = finalCookies['XSRF-TOKEN'] || xsrf;
   process.env.MZAD_SESSION = finalSession;
   process.env.MZAD_XSRF_TOKEN = finalXsrf;
-  console.log('[Mzad] OTP login successful!');
+
+  // Validate the session actually works
+  console.log('[Mzad] Verifying login session is authenticated...');
+  console.log('[Mzad] Verify OTP response status:', verifyRes.status);
+  console.log('[Mzad] Verify OTP response data (first 500):', JSON.stringify(verifyRes.data).substring(0, 500));
+  const loginValid = await isSessionValid(finalSession, finalXsrf);
+  if (!loginValid) {
+    console.error('[Mzad] WARNING: Login completed but session is NOT valid for add_advertise!');
+    console.error('[Mzad] OTP verify status was:', verifyRes.status);
+    throw new Error('Mzad login OTP verification succeeded but session is not authenticated');
+  }
+
+  console.log('[Mzad] OTP login successful and session validated!');
   return { session: finalSession, xsrf: finalXsrf, csrfToken: decodedXsrf(finalXsrf) };
 }
 
@@ -324,8 +338,8 @@ async function postAd(property, sessionData) {
   if (step1Res.cookies['mzadqatar_session']) session = step1Res.cookies['mzadqatar_session'];
   if (step1Res.cookies['XSRF-TOKEN']) xsrf = step1Res.cookies['XSRF-TOKEN'];
 
-  if (step1Res.status >= 400) {
-    throw new Error(`Mzad Step 1 failed: status=${step1Res.status} body=${JSON.stringify(step1Res.data).substring(0, 500)}`);
+  if (step1Res.status >= 300) {
+    throw new Error(`Mzad Step 1 failed (redirect/error): status=${step1Res.status} — session likely expired. Body=${JSON.stringify(step1Res.data).substring(0, 300)}`);
   }
 
   // ── STEP 2: Property details ──
@@ -369,8 +383,8 @@ async function postAd(property, sessionData) {
   if (step2Res.cookies['mzadqatar_session']) session = step2Res.cookies['mzadqatar_session'];
   if (step2Res.cookies['XSRF-TOKEN']) xsrf = step2Res.cookies['XSRF-TOKEN'];
 
-  if (step2Res.status >= 400) {
-    throw new Error(`Mzad Step 2 failed: status=${step2Res.status} body=${JSON.stringify(step2Res.data).substring(0, 500)}`);
+  if (step2Res.status >= 300) {
+    throw new Error(`Mzad Step 2 failed (redirect/error): status=${step2Res.status}`);
   }
 
   // ── STEP 3: Title, Description, Price, Image, Publish ──
