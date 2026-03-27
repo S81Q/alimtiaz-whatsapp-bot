@@ -636,13 +636,13 @@ async function postAd(property, sessionData) {
   // Step 3 may use FormData for image upload, or JSON with base64.
   // Try JSON first (matching steps 1 & 2 pattern), fall back to FormData.
   const step3Data = {
-    price: price,
-    titleEn: titleEn,
-    descriptionEn: desc,
-    titleAr: titleAr,
-    descriptionAr: desc,
+    productPrice: price,
+    productNameEnglish: titleEn,
+    productDescriptionEnglish: desc,
+    productNameArabic: titleAr,
+    productDescriptionArabic: desc,
     autoRenew: false,
-    termsAgreed: true,
+    agree_commission: 1,
   };
 
   // Upload image via browser FormData (bypass CF)
@@ -653,7 +653,8 @@ async function postAd(property, sessionData) {
   if (_page) {
     console.log('[Mzad] Step 3: Using browser fetch with FormData...');
     const csrf = decodedXsrf(xsrf);
-    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken) => {
+    const ver = _inertiaVersion || '';
+    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer) => {
       // Convert base64 to Blob
       const byteChars = atob(imgB64);
       const byteArr = new Uint8Array(byteChars.length);
@@ -662,13 +663,13 @@ async function postAd(property, sessionData) {
 
       const fd = new FormData();
       fd.append('step', '3');
-      fd.append('step3Data[price]', String(p));
-      fd.append('step3Data[titleEn]', tEn);
-      fd.append('step3Data[descriptionEn]', dEn);
-      fd.append('step3Data[titleAr]', tAr);
-      fd.append('step3Data[descriptionAr]', dAr);
-      fd.append('step3Data[autoRenew]', 'false');
-      fd.append('step3Data[termsAgreed]', 'true');
+      fd.append('step3Data[productPrice]', String(p));
+      fd.append('step3Data[productNameEnglish]', tEn);
+      fd.append('step3Data[productDescriptionEnglish]', dEn);
+      fd.append('step3Data[productNameArabic]', tAr);
+      fd.append('step3Data[productDescriptionArabic]', dAr);
+      fd.append('step3Data[autoRenew]', '0');
+      fd.append('step3Data[agree_commission]', '1');
       fd.append('step3Data[images][]', blob, 'property.jpg');
 
       const res = await fetch(url, {
@@ -676,7 +677,7 @@ async function postAd(property, sessionData) {
         headers: {
           'X-Requested-With': 'XMLHttpRequest',
           'X-Inertia': 'true',
-          'X-Inertia-Version': '',
+          'X-Inertia-Version': inertiaVer,
           'X-XSRF-TOKEN': csrfToken,
         },
         body: fd,
@@ -686,20 +687,20 @@ async function postAd(property, sessionData) {
       let json = null;
       try { json = JSON.parse(text); } catch {}
       return { status: res.status, data: json || text };
-    }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf);
+    }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver);
     // Wrap to match expected format
     step3Res = { status: step3Res.status, data: step3Res.data };
   } else {
     // Fallback: axios FormData
     const form = new FormData();
     form.append('step', '3');
-    form.append('step3Data[price]', String(price));
-    form.append('step3Data[titleEn]', titleEn);
-    form.append('step3Data[descriptionEn]', desc);
-    form.append('step3Data[titleAr]', titleAr);
-    form.append('step3Data[descriptionAr]', desc);
-    form.append('step3Data[autoRenew]', 'false');
-    form.append('step3Data[termsAgreed]', 'true');
+    form.append('step3Data[productPrice]', String(price));
+    form.append('step3Data[productNameEnglish]', titleEn);
+    form.append('step3Data[productDescriptionEnglish]', desc);
+    form.append('step3Data[productNameArabic]', titleAr);
+    form.append('step3Data[productDescriptionArabic]', desc);
+    form.append('step3Data[autoRenew]', '0');
+    form.append('step3Data[agree_commission]', '1');
     form.append('step3Data[images][]', fs.createReadStream(imagePath), {
       filename: 'property.jpg', contentType: 'image/jpeg',
     });
