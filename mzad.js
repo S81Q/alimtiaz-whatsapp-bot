@@ -564,6 +564,14 @@ async function postAd(property, sessionData) {
   }
   console.log('[Mzad] Step 1 data:', JSON.stringify(step1Res.data).substring(0, 500));
 
+  // Extract server-returned prevData from step 1 (Inertia form restores these before step 3)
+  let serverStep1Data = null;
+  try {
+    const s1props = typeof step1Res.data === 'string' ? JSON.parse(step1Res.data) : step1Res.data;
+    serverStep1Data = s1props?.props?.getAddAdvertiseData?.prevData?.step1Data || null;
+    console.log('[Mzad] Server step1Data prevData:', JSON.stringify(serverStep1Data));
+  } catch (e) { console.warn('[Mzad] Could not extract step1 prevData:', e.message); }
+
   // ── STEP 2: Property details ──
   console.log('[Mzad] Step 2: Submitting property details...');
 
@@ -614,6 +622,17 @@ async function postAd(property, sessionData) {
     throw new Error(`Mzad Step 2 failed: status=${step2Res.status} body=${JSON.stringify(step2Res.data).substring(0, 300)}`);
   }
   console.log('[Mzad] Step 2 data:', JSON.stringify(step2Res.data).substring(0, 500));
+
+  // Extract server-returned prevData from step 2
+  let serverStep2Data = null;
+  try {
+    const s2props = typeof step2Res.data === 'string' ? JSON.parse(step2Res.data) : step2Res.data;
+    serverStep2Data = s2props?.props?.getAddAdvertiseData?.prevData?.step2Data || null;
+    const prevData = s2props?.props?.getAddAdvertiseData?.prevData;
+    console.log('[Mzad] Server step2 prevData keys:', prevData ? Object.keys(prevData) : 'null');
+    console.log('[Mzad] Server step2Data prevData:', JSON.stringify(serverStep2Data).substring(0, 500));
+    if (prevData?.step1Data) serverStep1Data = prevData.step1Data;
+  } catch (e) { console.warn('[Mzad] Could not extract step2 prevData:', e.message); }
 
   // ── STEP 3: Title, Description, Price, Image, Publish ──
   console.log('[Mzad] Step 3: Submitting ad content + publish...');
@@ -680,17 +699,56 @@ async function postAd(property, sessionData) {
       for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
       const blob = new Blob([byteArr], { type: 'image/jpeg' });
 
+      // Recursive FormData builder (mimics Inertia's objectToFormData)
+      function appendFormData(fd, key, value) {
+        if (value === null || value === undefined) {
+          fd.append(key, '');
+        } else if (value instanceof Blob || value instanceof File) {
+          fd.append(key, value);
+        } else if (typeof value === 'object' && !Array.isArray(value)) {
+          for (const [k, v] of Object.entries(value)) {
+            appendFormData(fd, key + '[' + k + ']', v);
+          }
+        } else if (Array.isArray(value)) {
+          if (value.length === 0) {
+            fd.append(key, '');
+          } else {
+            for (let i = 0; i < value.length; i++) {
+              appendFormData(fd, key + '[' + i + ']', value[i]);
+            }
+          }
+        } else {
+          fd.append(key, String(value));
+        }
+      }
+
       const fd = new FormData();
       fd.append('step', '3');
-      // Include step1Data
-      for (const [k, v] of Object.entries(s1Data || {})) {
-        fd.append('step1Data[' + k + ']', String(v));
-      }
-      // Include step2Data
-      for (const [k, v] of Object.entries(s2Data || {})) {
-        fd.append('step2Data[' + k + ']', String(v));
-      }
+      // Include step1Data (from server prevData)
+      appendFormData(fd, 'step1Data', s1Data || {});
+      // Include step2Data (from server prevData)
+      appendFormData(fd, 'step2Data', s2Data || {});
       // step3Data
+      // REPLACED: Using recursive step3 builder instead
+      const step3Obj = {
+        productPrice: String(p),
+        productNameEnglish: tEn,
+        productDescriptionEnglish: dEn,
+        productNameArabic: tAr,
+        productDescriptionArabic: dAr,
+        productNameArEn: '',
+        productDescriptionArEn: '',
+        autoRenew: '0',
+        agree_commission: '1',
+        currencyId: String(curId || 1),
+        isResetImages: '0',
+        productId: '',
+        images: [
+          { id: '0', type: 'image/jpeg', url: '', tempFile: blob }
+        ],
+      };
+      appendFormData(fd, 'step3Data', step3Obj);
+      /* OLD MANUAL APPENDS BELOW - SKIP
       fd.append('step3Data[productPrice]', String(p));
       fd.append('step3Data[productNameEnglish]', tEn);
       fd.append('step3Data[productDescriptionEnglish]', dEn);
@@ -707,6 +765,7 @@ async function postAd(property, sessionData) {
       fd.append('step3Data[images][0][type]', 'image/jpeg');
       fd.append('step3Data[images][0][url]', '');
       fd.append('step3Data[images][0][tempFile]', blob, 'property.jpg');
+      END OLD MANUAL APPENDS */
 
       const res = await fetch(url, {
         method: 'POST',
@@ -725,7 +784,7 @@ async function postAd(property, sessionData) {
       try { json = JSON.parse(text); } catch {}
       return { status: res.status, data: json ? { component: json.component, props_keys: Object.keys(json.props || {}), errors: json.props?.errors, step: json.props?.step, flash: json.props?.flash, url: json.url, redirectBackData: json.props?.redirectBackData || null, getAddAdvertiseData: json.props?.getAddAdvertiseData ? { step: json.props.getAddAdvertiseData.prevData?.step, prevData: json.props.getAddAdvertiseData.prevData, adsSelectedData: json.props.getAddAdvertiseData.adsSelectedData, apiData_keys: json.props.getAddAdvertiseData.apiData ? Object.keys(json.props.getAddAdvertiseData.apiData) : null } : null, currencies: json.props?.settingsData?.currencies?.slice(0, 3) } : text.substring(0, 500), fullLen: text.length, isJson: !!json };
     }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver,
-       { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, step2Data, currencyId);
+       serverStep1Data || { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, serverStep2Data || step2Data, currencyId);
     // Wrap to match expected format
     step3Res = { status: step3Res.status, data: step3Res.data };
   } else {
