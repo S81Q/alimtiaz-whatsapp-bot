@@ -689,7 +689,7 @@ async function postAd(property, sessionData) {
       const text = await res.text();
       let json = null;
       try { json = JSON.parse(text); } catch {}
-      return { status: res.status, data: json || text };
+      return { status: res.status, data: json ? { component: json.component, props_keys: Object.keys(json.props || {}), errors: json.props?.errors, step: json.props?.step, flash: json.props?.flash, url: json.url } : text.substring(0, 500), fullLen: text.length, isJson: !!json };
     }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver,
        { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, step2Data);
     // Wrap to match expected format
