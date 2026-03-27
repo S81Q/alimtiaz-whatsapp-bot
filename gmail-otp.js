@@ -58,7 +58,7 @@ async function getGmailClient() {
  * @param {number} retryDelay - ms between retries (default 10000)
  * @returns {string|null} OTP code or null
  */
-async function readOtpFromGmail(platform, maxRetries = 3, retryDelay = 10000) {
+async function readOtpFromGmail(platform, maxRetries = 3, retryDelay = 10000, minTimestamp = 0) {
   const delay = ms => new Promise(r => setTimeout(r, ms));
 
   // SMS arrives via "SMS Forwarder" app → email from no-reply@sms-forwarder.co to sultanaliqatar81@gmail.com
@@ -92,6 +92,14 @@ async function readOtpFromGmail(platform, maxRetries = 3, retryDelay = 10000) {
           format: 'full',
         });
 
+        // Skip messages older than minTimestamp (to avoid stale OTPs)
+        if (minTimestamp > 0 && msgRes.data.internalDate) {
+          const msgTime = parseInt(msgRes.data.internalDate, 10);
+          if (msgTime < minTimestamp) {
+            console.log('[Gmail OTP] Skipping old message (time: ' + new Date(msgTime).toISOString() + ')');
+            continue;
+          }
+        }
         const body = extractEmailBody(msgRes.data);
         // Look for 4-6 digit OTP code
         const otpMatch = body.match(/\b(\d{4,6})\b/);

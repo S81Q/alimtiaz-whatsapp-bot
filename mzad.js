@@ -368,9 +368,10 @@ async function loginWithOtp() {
   }
 
   // ── Step C: Wait for OTP and read from Gmail ──
+  const otpRequestTime = Date.now();
   console.log('[Mzad] Waiting 5s for OTP delivery...');
   await delay(5000);
-  const otp = await readOtpFromGmail('mzad', 8, 5000);
+  const otp = await readOtpFromGmail('mzad', 8, 5000, otpRequestTime);
   if (!otp) throw new Error('Mzad: Could not retrieve OTP from Gmail');
   console.log('[Mzad] Got OTP:', otp);
 
