@@ -374,7 +374,6 @@ async function loginWithOtp() {
     },
     body: JSON.stringify({ phone, otp, recaptchaToken: recaptchaToken2 || 'placeholder-token' }),
     credentials: 'include',
-    redirect: 'manual',
   });
 
   console.log('[Mzad] OTP verify status:', verifyRes.status);
