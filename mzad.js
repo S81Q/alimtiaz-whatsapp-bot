@@ -356,8 +356,8 @@ async function loginWithOtp() {
 
   // Check for rate limiting
   if (otpRes.body && otpRes.body.includes('three times in one hour')) {
-    console.warn('[Mzad] Rate limited! Mzad says: wait 1 hour. Will retry in 20 minutes...');
-    await delay(20 * 60 * 1000); // wait 20 min then retry
+    console.warn('[Mzad] Rate limited! Mzad says: wait 1 hour. Will retry in 65 minutes...');
+    await delay(65 * 60 * 1000); // wait 65 min then retry (full hour + buffer)
     // Reload page and retry recursively
     await page.goto(`${BASE_URL}/en/login`, { waitUntil: 'networkidle2', timeout: 60000 });
     return await loginWithOtp();
@@ -435,8 +435,8 @@ async function loginWithOtp() {
     // Check if verify response had errors
     const verifyBody = verifyRes.body || '';
     if (verifyBody.includes('three times in one hour')) {
-      console.warn('[Mzad] Rate limited during verify. Waiting 20 min...');
-      await delay(20 * 60 * 1000);
+      console.warn('[Mzad] Rate limited during verify. Waiting 65 min...');
+      await delay(65 * 60 * 1000);
       await page.goto(`${BASE_URL}/en/login`, { waitUntil: 'networkidle2', timeout: 60000 });
       return await loginWithOtp();
     }
