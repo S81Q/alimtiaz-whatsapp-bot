@@ -127,6 +127,36 @@ function decodedXsrf(xsrf) {
 // Inertia request helper
 // ─────────────────────────────────────────────
 async function inertiaPost(url, data, session, xsrf) {
+  // Use browser fetch if available (for Cloudflare bypass)
+  if (_page) {
+    try {
+      const csrf = decodedXsrf(xsrf);
+      const res = await browserFetch(_page, url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/html, application/xhtml+xml',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Inertia': 'true',
+          'X-Inertia-Version': '',
+          'X-XSRF-TOKEN': csrf,
+        },
+        body: JSON.stringify(data),
+        credentials: 'include',
+      });
+      // Get updated cookies from browser
+      const pageCookies = await _page.cookies();
+      const newCookies = {};
+      for (const c of pageCookies) {
+        newCookies[c.name] = c.value;
+      }
+      return { data: res.json || res.body, status: res.status, cookies: newCookies };
+    } catch (e) {
+      console.warn('[Mzad] Browser fetch failed, falling back to axios:', e.message);
+    }
+  }
+
+  // Fallback: axios (may be blocked by CF)
   const res = await axios.post(url, data, {
     headers: {
       'Content-Type': 'application/json',
@@ -143,8 +173,6 @@ async function inertiaPost(url, data, session, xsrf) {
     maxRedirects: 0,
     validateStatus: s => s < 500,
   });
-
-  // Update cookies if server sends new ones
   const newCookies = parseCookies(res.headers['set-cookie']);
   return { data: res.data, status: res.status, cookies: newCookies };
 }
@@ -175,23 +203,30 @@ async function getInitialCookies() {
 async function isSessionValid(session, xsrf) {
   if (!session || !xsrf) return false;
   try {
+    // If browser is available, use it (bypass CF)
+    if (_page) {
+      const res = await browserFetch(_page, `${BASE_URL}/en/add_advertise`, {
+        method: 'GET',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Inertia': 'true', 'Accept': 'text/html, application/xhtml+xml' },
+        credentials: 'include',
+      });
+      const isValid = res.status === 200 && !res.body.includes('/login');
+      console.log('[Mzad] Session check (browser): status=' + res.status + ' valid=' + isValid);
+      return isValid;
+    }
+    // Fallback: axios
     const cookieStr = buildCookieStr(session, xsrf);
-    console.log('[Mzad] isSessionValid check with cookie length:', cookieStr.length);
     const res = await axios.get(`${BASE_URL}/en/add_advertise`, {
       headers: {
-        'Cookie': cookieStr,
-        'X-Inertia': 'true', 'X-Requested-With': 'XMLHttpRequest',
+        'Cookie': cookieStr, 'X-Inertia': 'true', 'X-Requested-With': 'XMLHttpRequest',
         'Accept': 'text/html, application/xhtml+xml',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
       },
-      maxRedirects: 0,
-      validateStatus: s => s < 500,
+      maxRedirects: 0, validateStatus: s => s < 500,
     });
-    // If redirected to login, session is invalid
     if (res.status === 302 || res.status === 301) return false;
-    // Check if the response contains add_advertise page data
     const isValid = res.status === 200 || res.status === 409;
-    console.log('[Mzad] Session check: status=' + res.status + ' valid=' + isValid);
+    console.log('[Mzad] Session check (axios): status=' + res.status + ' valid=' + isValid);
     return isValid;
   } catch { return false; }
 }
@@ -199,41 +234,52 @@ async function isSessionValid(session, xsrf) {
 // ─────────────────────────────────────────────
 // Login with OTP
 // ─────────────────────────────────────────────
-async function getCfClearanceCookies() {
-  console.log('[Mzad] Launching Puppeteer stealth to get CF clearance cookies...');
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-gpu', '--single-process', '--no-zygote',
-    ],
-  });
-  try {
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    await page.goto(`${BASE_URL}/en/login`, { waitUntil: 'networkidle2', timeout: 60000 });
-    console.log('[Mzad] Page loaded, URL:', page.url());
+// Shared browser instance (reused across login + ad posting)
+let _browser = null;
+let _page = null;
 
-    // Wait for CF challenge to resolve (login form appears)
-    try {
-      await page.waitForSelector('input', { timeout: 30000 });
-      console.log('[Mzad] Page content loaded — CF challenge passed ✓');
-    } catch {
-      await new Promise(r => setTimeout(r, 10000));
-    }
-
-    // Extract ALL cookies
-    const cookies = await page.cookies();
-    const result = {};
-    for (const c of cookies) {
-      result[c.name] = c.value;
-    }
-    console.log('[Mzad] Got cookies from browser:', Object.keys(result).join(', '));
-    return result;
-  } finally {
-    await browser.close().catch(() => {});
-    console.log('[Mzad] Browser closed');
+async function getBrowserPage() {
+  if (_browser && _page) {
+    try { await _page.evaluate(() => true); return _page; } catch { /* page dead, relaunch */ }
   }
+  if (_browser) await _browser.close().catch(() => {});
+
+  console.log('[Mzad] Launching Puppeteer stealth browser...');
+  _browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+           '--disable-gpu', '--single-process', '--no-zygote'],
+  });
+  _page = await _browser.newPage();
+  await _page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  await _page.setViewport({ width: 1280, height: 800 });
+
+  // Navigate to mzad to pass Cloudflare
+  console.log('[Mzad] Navigating to Mzad (Cloudflare bypass)...');
+  await _page.goto(`${BASE_URL}/en/login`, { waitUntil: 'networkidle2', timeout: 60000 });
+  try {
+    await _page.waitForSelector('input', { timeout: 30000 });
+    console.log('[Mzad] Cloudflare bypassed ✓');
+  } catch {
+    await new Promise(r => setTimeout(r, 10000));
+    console.log('[Mzad] Waited extra 10s for CF, URL:', _page.url());
+  }
+  return _page;
+}
+
+async function closeBrowser() {
+  if (_browser) { await _browser.close().catch(() => {}); _browser = null; _page = null; }
+}
+
+// Make a fetch() call from INSIDE the Puppeteer browser (inherits CF clearance + TLS)
+async function browserFetch(page, url, options) {
+  return await page.evaluate(async (u, opts) => {
+    const res = await fetch(u, opts);
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    return { status: res.status, body: text.substring(0, 3000), json, headers: Object.fromEntries(res.headers.entries()) };
+  }, url, options);
 }
 
 async function loginWithOtp() {
@@ -241,117 +287,109 @@ async function loginWithOtp() {
   const phone = process.env.MZAD_PHONE || '70297066';
   const delay = ms => new Promise(r => setTimeout(r, ms));
 
-  // Step A: Get CF clearance cookies via Puppeteer
-  const browserCookies = await getCfClearanceCookies();
-  const cfCookies = {};
-  for (const [k, v] of Object.entries(browserCookies)) {
-    if (k === 'cf_clearance' || k.startsWith('__cf')) cfCookies[k] = v;
+  const page = await getBrowserPage();
+
+  // Extract XSRF token from cookie
+  const cookies = await page.cookies();
+  let xsrf = '';
+  for (const c of cookies) {
+    if (c.name === 'XSRF-TOKEN') xsrf = c.value;
   }
-  // Use browser session/xsrf as initial cookies
-  let session = browserCookies['mzadqatar_session'] || '';
-  let xsrf = browserCookies['XSRF-TOKEN'] || '';
-  let csrf = decodedXsrf(xsrf);
+  const csrf = decodedXsrf(xsrf);
+  console.log('[Mzad] XSRF token from browser:', xsrf.length, 'chars');
 
-  // Store CF cookies for all subsequent requests
-  process.env.MZAD_CF_COOKIES = JSON.stringify(cfCookies);
-  console.log('[Mzad] CF cookies stored:', Object.keys(cfCookies).length, 'cookies');
-  console.log('[Mzad] Initial session from browser:', session.length, 'chars');
-
-  if (!session || !xsrf) {
-    // Fallback: get fresh cookies via axios (won't have CF clearance but try anyway)
-    const initial = await getInitialCookies();
-    session = initial.session;
-    xsrf = initial.xsrf;
-    csrf = initial.csrf;
-  }
-
-  // Step B: Request OTP via axios (with CF cookies)
+  // Solve reCAPTCHA
   const recaptchaToken1 = await solveRecaptchaV3('login');
   console.log('[Mzad] Sending OTP request to phone', phone);
 
-  const otpReqRes = await axios.post(`${BASE_URL}/en/login`, {
-    phone, recaptchaToken: recaptchaToken1 || 'placeholder-token',
-  }, {
+  // Make OTP request via browser's fetch
+  const otpRes = await browserFetch(page, `${BASE_URL}/en/login`, {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true',
-      'X-Inertia-Version': '',
       'X-XSRF-TOKEN': csrf,
-      'Cookie': buildCookieStr(session, xsrf),
-      'Origin': BASE_URL,
-      'Referer': `${BASE_URL}/en/login`,
       'Accept': 'text/html, application/xhtml+xml',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
-    validateStatus: s => s < 500,
+    body: JSON.stringify({ phone, recaptchaToken: recaptchaToken1 || 'placeholder-token' }),
+    credentials: 'include',
   });
 
-  const cookies2 = parseCookies(otpReqRes.headers['set-cookie']);
-  if (cookies2['mzadqatar_session']) session = cookies2['mzadqatar_session'];
-  if (cookies2['XSRF-TOKEN']) xsrf = cookies2['XSRF-TOKEN'];
-  csrf = decodedXsrf(xsrf);
-  console.log('[Mzad] OTP request status:', otpReqRes.status);
+  console.log('[Mzad] OTP request status:', otpRes.status);
+  console.log('[Mzad] OTP response (300):', otpRes.body.substring(0, 300));
 
-  if (otpReqRes.status === 403) {
-    console.error('[Mzad] OTP request blocked (403). CF clearance may not be valid.');
-    console.error('[Mzad] Response (200 chars):', JSON.stringify(otpReqRes.data).substring(0, 200));
-    throw new Error('Mzad OTP request blocked by Cloudflare (403)');
+  if (otpRes.status >= 400) {
+    throw new Error(`Mzad OTP request failed: status=${otpRes.status} body=${otpRes.body.substring(0, 200)}`);
   }
 
-  // Step C: Wait for OTP and read from Gmail
+  // Wait for OTP
   console.log('[Mzad] Waiting 10s for OTP delivery...');
   await delay(10000);
   const otp = await readOtpFromGmail('mzad');
   if (!otp) throw new Error('Mzad: Could not retrieve OTP from Gmail');
 
-  // Step D: Verify OTP via axios
+  // Solve reCAPTCHA again
   const recaptchaToken2 = await solveRecaptchaV3('login');
-  console.log('[Mzad] Verifying OTP', otp);
 
-  const verifyRes = await axios.post(`${BASE_URL}/en/login`, {
-    phone, otp, recaptchaToken: recaptchaToken2 || 'placeholder-token',
-  }, {
+  // Get fresh XSRF (may have changed)
+  const cookies2 = await page.cookies();
+  let xsrf2 = '';
+  for (const c of cookies2) {
+    if (c.name === 'XSRF-TOKEN') xsrf2 = c.value;
+  }
+  const csrf2 = decodedXsrf(xsrf2);
+
+  // Verify OTP via browser's fetch
+  console.log('[Mzad] Verifying OTP:', otp);
+  const verifyRes = await browserFetch(page, `${BASE_URL}/en/login`, {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-XSRF-TOKEN': csrf,
-      'X-CSRF-TOKEN': csrf,
       'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true',
-      'Cookie': buildCookieStr(session, xsrf),
-      'Origin': BASE_URL,
-      'Referer': `${BASE_URL}/en/login`,
+      'X-XSRF-TOKEN': csrf2,
       'Accept': 'text/html, application/xhtml+xml',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
-    maxRedirects: 0,
-    validateStatus: s => s < 500,
+    body: JSON.stringify({ phone, otp, recaptchaToken: recaptchaToken2 || 'placeholder-token' }),
+    credentials: 'include',
+    redirect: 'manual',
   });
 
   console.log('[Mzad] OTP verify status:', verifyRes.status);
+  console.log('[Mzad] OTP verify body (300):', verifyRes.body.substring(0, 300));
 
-  const finalCookies = parseCookies(verifyRes.headers['set-cookie']);
-  const finalSession = finalCookies['mzadqatar_session'] || session;
-  const finalXsrf = finalCookies['XSRF-TOKEN'] || xsrf;
+  // Extract final cookies from browser
+  const finalCookies = await page.cookies();
+  let finalSession = '', finalXsrf = '';
+  for (const c of finalCookies) {
+    if (c.name === 'mzadqatar_session') finalSession = c.value;
+    if (c.name === 'XSRF-TOKEN') finalXsrf = c.value;
+  }
+
+  console.log('[Mzad] Final session:', finalSession.length, 'chars');
   process.env.MZAD_SESSION = finalSession;
   process.env.MZAD_XSRF_TOKEN = finalXsrf;
 
-  // Validate
-  const loginValid = await isSessionValid(finalSession, finalXsrf);
-  if (!loginValid) {
-    const debugInfo = {
-      otpReqStatus: otpReqRes.status,
-      verifyStatus: verifyRes.status,
-      verifyData: JSON.stringify(verifyRes.data).substring(0, 300),
-      cfCookieCount: Object.keys(cfCookies).length,
-      otp,
-    };
-    console.error('[Mzad] LOGIN DEBUG:', JSON.stringify(debugInfo));
-    throw new Error('Mzad login failed: session not authenticated. Debug: ' + JSON.stringify(debugInfo));
+  // Validate by trying to access add_advertise from browser
+  console.log('[Mzad] Validating session by navigating to add_advertise...');
+  const checkRes = await browserFetch(page, `${BASE_URL}/en/add_advertise`, {
+    method: 'GET',
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-Inertia': 'true',
+      'Accept': 'text/html, application/xhtml+xml',
+    },
+    credentials: 'include',
+  });
+  console.log('[Mzad] add_advertise check status:', checkRes.status);
+
+  if (checkRes.status === 302 || checkRes.status === 301 || checkRes.body.includes('/login')) {
+    throw new Error('Mzad login: session not authenticated after OTP verify. Check status=' + checkRes.status);
   }
 
   console.log('[Mzad] Login successful and validated! ✓');
-  return { session: finalSession, xsrf: finalXsrf, csrfToken: decodedXsrf(finalXsrf) };
+  return { session: finalSession, xsrf: finalXsrf, csrfToken: decodedXsrf(finalXsrf), useBrowser: true };
 }
 
 // ─────────────────────────────────────────────
@@ -512,39 +550,76 @@ async function postAd(property, sessionData) {
     termsAgreed: true,
   };
 
-  // First try: JSON post with image as separate upload
-  // The form may upload images via a separate endpoint or include in step3
-  // Try with FormData which handles file upload
-  const form = new FormData();
-  form.append('step', '3');
-  form.append('step3Data[price]', String(price));
-  form.append('step3Data[titleEn]', titleEn);
-  form.append('step3Data[descriptionEn]', desc);
-  form.append('step3Data[titleAr]', titleAr);
-  form.append('step3Data[descriptionAr]', desc);
-  form.append('step3Data[autoRenew]', 'false');
-  form.append('step3Data[termsAgreed]', 'true');
-  form.append('step3Data[images][]', fs.createReadStream(imagePath), {
-    filename: 'property.jpg',
-    contentType: 'image/jpeg',
-  });
+  // Upload image via browser FormData (bypass CF)
+  const imgBuffer = fs.readFileSync(imagePath);
+  const imgBase64 = imgBuffer.toString('base64');
 
-  const step3Res = await axios.post(`${BASE_URL}/en/add_advertise`, form, {
-    headers: {
-      ...form.getHeaders(),
-      'X-Requested-With': 'XMLHttpRequest',
-      'X-Inertia': 'true',
-      'X-Inertia-Version': '',
-      'X-XSRF-TOKEN': decodedXsrf(xsrf),
-      'Cookie': buildCookieStr(session, xsrf),
-      'Origin': BASE_URL,
-      'Referer': `${BASE_URL}/en/add_advertise`,
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-    },
-    maxRedirects: 0,
-    validateStatus: s => s < 500,
-    maxContentLength: 50 * 1024 * 1024,
-  });
+  let step3Res;
+  if (_page) {
+    console.log('[Mzad] Step 3: Using browser fetch with FormData...');
+    const csrf = decodedXsrf(xsrf);
+    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken) => {
+      // Convert base64 to Blob
+      const byteChars = atob(imgB64);
+      const byteArr = new Uint8Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+      const blob = new Blob([byteArr], { type: 'image/jpeg' });
+
+      const fd = new FormData();
+      fd.append('step', '3');
+      fd.append('step3Data[price]', String(p));
+      fd.append('step3Data[titleEn]', tEn);
+      fd.append('step3Data[descriptionEn]', dEn);
+      fd.append('step3Data[titleAr]', tAr);
+      fd.append('step3Data[descriptionAr]', dAr);
+      fd.append('step3Data[autoRenew]', 'false');
+      fd.append('step3Data[termsAgreed]', 'true');
+      fd.append('step3Data[images][]', blob, 'property.jpg');
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Inertia': 'true',
+          'X-Inertia-Version': '',
+          'X-XSRF-TOKEN': csrfToken,
+        },
+        body: fd,
+        credentials: 'include',
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch {}
+      return { status: res.status, data: json || text };
+    }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf);
+    // Wrap to match expected format
+    step3Res = { status: step3Res.status, data: step3Res.data };
+  } else {
+    // Fallback: axios FormData
+    const form = new FormData();
+    form.append('step', '3');
+    form.append('step3Data[price]', String(price));
+    form.append('step3Data[titleEn]', titleEn);
+    form.append('step3Data[descriptionEn]', desc);
+    form.append('step3Data[titleAr]', titleAr);
+    form.append('step3Data[descriptionAr]', desc);
+    form.append('step3Data[autoRenew]', 'false');
+    form.append('step3Data[termsAgreed]', 'true');
+    form.append('step3Data[images][]', fs.createReadStream(imagePath), {
+      filename: 'property.jpg', contentType: 'image/jpeg',
+    });
+    const axiosRes = await axios.post(`${BASE_URL}/en/add_advertise`, form, {
+      headers: {
+        ...form.getHeaders(),
+        'X-Requested-With': 'XMLHttpRequest', 'X-Inertia': 'true', 'X-Inertia-Version': '',
+        'X-XSRF-TOKEN': decodedXsrf(xsrf), 'Cookie': buildCookieStr(session, xsrf),
+        'Origin': BASE_URL, 'Referer': `${BASE_URL}/en/add_advertise`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      },
+      maxRedirects: 0, validateStatus: s => s < 500, maxContentLength: 50 * 1024 * 1024,
+    });
+    step3Res = axiosRes;
+  }
 
   console.log('[Mzad] Step 3 response status:', step3Res.status);
   console.log('[Mzad] Step 3 response data:', JSON.stringify(step3Res.data).substring(0, 1000));
@@ -593,4 +668,4 @@ async function postAd(property, sessionData) {
   };
 }
 
-module.exports = { getSession, postAd };
+module.exports = { getSession, postAd, closeBrowser };
