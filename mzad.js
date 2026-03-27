@@ -14,6 +14,9 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 const { buildTitleAr, buildTitleEn, buildDescription } = require('./ad-builders');
 
 const BASE_URL = 'https://mzadqatar.com';
@@ -105,7 +108,15 @@ function parseCookies(setCookieHeaders) {
 }
 
 function buildCookieStr(session, xsrf) {
-  return `XSRF-TOKEN=${xsrf}; mzadqatar_session=${session}; selectedCountry=QA; currentLang=en`;
+  let str = `XSRF-TOKEN=${xsrf}; mzadqatar_session=${session}; selectedCountry=QA; currentLang=en`;
+  // Append Cloudflare cookies if available
+  try {
+    const cfCookies = JSON.parse(process.env.MZAD_CF_COOKIES || '{}');
+    for (const [k, v] of Object.entries(cfCookies)) {
+      str += `; ${k}=${v}`;
+    }
+  } catch {}
+  return str;
 }
 
 function decodedXsrf(xsrf) {
@@ -164,11 +175,14 @@ async function getInitialCookies() {
 async function isSessionValid(session, xsrf) {
   if (!session || !xsrf) return false;
   try {
+    const cookieStr = buildCookieStr(session, xsrf);
+    console.log('[Mzad] isSessionValid check with cookie length:', cookieStr.length);
     const res = await axios.get(`${BASE_URL}/en/add_advertise`, {
       headers: {
-        'Cookie': buildCookieStr(session, xsrf),
+        'Cookie': cookieStr,
         'X-Inertia': 'true', 'X-Requested-With': 'XMLHttpRequest',
-        'Accept': 'text/html, application/xhtml+xml', 'User-Agent': 'Mozilla/5.0',
+        'Accept': 'text/html, application/xhtml+xml',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
       maxRedirects: 0,
       validateStatus: s => s < 500,
@@ -188,84 +202,187 @@ async function isSessionValid(session, xsrf) {
 async function loginWithOtp() {
   const { readOtpFromGmail } = require('./gmail-otp');
   const phone = process.env.MZAD_PHONE || '70297066';
-  const initial = await getInitialCookies();
-  let { session, xsrf, csrf } = initial;
-  const recaptchaToken1 = await solveRecaptchaV3('login');
+  const delay = ms => new Promise(r => setTimeout(r, ms));
 
-  console.log('[Mzad] Sending OTP request to phone', phone);
-  const otpReqRes = await axios.post(`${BASE_URL}/en/login`, {
-    phone, recaptchaToken: recaptchaToken1 || 'placeholder-token',
-  }, {
-    headers: {
-      'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest',
-      'X-Inertia': 'true', 'Cookie': buildCookieStr(session, xsrf),
-      'Origin': BASE_URL, 'Referer': `${BASE_URL}/en/login`,
-      'Accept': 'text/html, application/xhtml+xml',
-      'X-XSRF-TOKEN': csrf,
-      'X-Inertia-Version': '',
-    },
-    validateStatus: s => s < 500,
+  console.log('[Mzad] Launching Puppeteer with stealth for Cloudflare bypass...');
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: [
+      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+      '--disable-gpu', '--single-process', '--no-zygote',
+    ],
   });
 
-  const cookies2 = parseCookies(otpReqRes.headers['set-cookie']);
-  if (cookies2['mzadqatar_session']) session = cookies2['mzadqatar_session'];
-  if (cookies2['XSRF-TOKEN']) xsrf = cookies2['XSRF-TOKEN'];
-  csrf = decodedXsrf(xsrf);
-  console.log('[Mzad] OTP request status:', otpReqRes.status);
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.setViewport({ width: 1280, height: 800 });
 
-  console.log('[Mzad] Waiting 8s for OTP delivery...');
-  await new Promise(r => setTimeout(r, 8000));
-  const otp = await readOtpFromGmail('mzad');
-  if (!otp) throw new Error('Mzad: Could not retrieve OTP from Gmail');
+    // Navigate to login page (Cloudflare challenge is solved by stealth plugin)
+    console.log('[Mzad] Navigating to login page...');
+    await page.goto(`${BASE_URL}/en/login`, { waitUntil: 'networkidle2', timeout: 60000 });
+    console.log('[Mzad] Page loaded, URL:', page.url());
 
-  const recaptchaToken2 = await solveRecaptchaV3('login');
-  console.log('[Mzad] Verifying OTP', otp);
-  const verifyRes = await axios.post(`${BASE_URL}/en/login`, {
-    phone, otp, recaptchaToken: recaptchaToken2 || 'placeholder-token',
-  }, {
-    headers: {
-      'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf,
-      'X-Requested-With': 'XMLHttpRequest', 'X-Inertia': 'true',
-      'Cookie': buildCookieStr(session, xsrf),
-      'Origin': BASE_URL, 'Referer': `${BASE_URL}/en/login`, 'Accept': 'application/json',
-    },
-    maxRedirects: 0, validateStatus: s => s < 500,
-  });
+    // Wait for login form to appear (means Cloudflare passed)
+    try {
+      await page.waitForSelector('input[type="tel"], input[name="phone"], input[placeholder*="phone"], input[placeholder*="Phone"]', { timeout: 30000 });
+      console.log('[Mzad] Login form detected — Cloudflare bypassed ✓');
+    } catch (e) {
+      // Try waiting longer for CF challenge
+      console.log('[Mzad] Waiting longer for Cloudflare challenge...');
+      await delay(10000);
+      const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 500));
+      console.log('[Mzad] Page text:', bodyText);
+    }
 
-  const finalCookies = parseCookies(verifyRes.headers['set-cookie']);
-  const finalSession = finalCookies['mzadqatar_session'] || session;
-  const finalXsrf = finalCookies['XSRF-TOKEN'] || xsrf;
-  process.env.MZAD_SESSION = finalSession;
-  process.env.MZAD_XSRF_TOKEN = finalXsrf;
+    // Solve reCAPTCHA for login
+    const recaptchaToken = await solveRecaptchaV3('login');
 
-  // Validate the session actually works
-  console.log('[Mzad] Verifying login session is authenticated...');
-  console.log('[Mzad] OTP request status:', otpReqRes.status);
-  console.log('[Mzad] OTP request data (500):', JSON.stringify(otpReqRes.data).substring(0, 500));
-  console.log('[Mzad] Verify OTP response status:', verifyRes.status);
-  console.log('[Mzad] Verify OTP response headers set-cookie count:', (verifyRes.headers['set-cookie'] || []).length);
-  console.log('[Mzad] Verify OTP response data (500):', JSON.stringify(verifyRes.data).substring(0, 500));
-  console.log('[Mzad] Final session length:', finalSession.length, 'Final xsrf length:', finalXsrf.length);
-  const loginValid = await isSessionValid(finalSession, finalXsrf);
-  if (!loginValid) {
-    // Return debug info instead of just throwing
-    const debugInfo = {
-      otpReqStatus: otpReqRes.status,
-      otpReqData: JSON.stringify(otpReqRes.data).substring(0, 300),
-      verifyStatus: verifyRes.status,
-      verifyData: JSON.stringify(verifyRes.data).substring(0, 300),
-      finalSessionLen: finalSession.length,
-      finalXsrfLen: finalXsrf.length,
-      otp: otp,
-      recaptcha1: recaptchaToken1 ? 'solved' : 'null',
-      recaptcha2: recaptchaToken2 ? 'solved' : 'null',
-    };
-    console.error('[Mzad] LOGIN DEBUG:', JSON.stringify(debugInfo));
-    throw new Error('Mzad login failed: session not authenticated. Debug: ' + JSON.stringify(debugInfo));
+    // Type phone number into the form
+    console.log('[Mzad] Entering phone number:', phone);
+    const phoneInput = await page.$('input[type="tel"], input[name="phone"]');
+    if (phoneInput) {
+      await phoneInput.click({ clickCount: 3 });
+      await phoneInput.type(phone, { delay: 50 });
+    } else {
+      // Try to find by evaluating the page
+      await page.evaluate((ph) => {
+        const inputs = document.querySelectorAll('input');
+        for (const inp of inputs) {
+          if (inp.type === 'tel' || inp.name === 'phone' || inp.placeholder?.toLowerCase().includes('phone')) {
+            inp.value = ph;
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+          }
+        }
+      }, phone);
+    }
+
+    // Inject reCAPTCHA token if solved
+    if (recaptchaToken) {
+      await page.evaluate((token) => {
+        const el = document.getElementById('g-recaptcha-response');
+        if (el) el.value = token;
+        // Also try setting in Vue/Inertia reactive data
+        const textarea = document.querySelector('textarea[name="g-recaptcha-response"]');
+        if (textarea) textarea.value = token;
+      }, recaptchaToken);
+      console.log('[Mzad] reCAPTCHA token injected');
+    }
+
+    // Click submit / send OTP button
+    console.log('[Mzad] Clicking send OTP button...');
+    const submitBtn = await page.$('button[type="submit"], button.btn-primary, form button');
+    if (submitBtn) {
+      await submitBtn.click();
+    } else {
+      await page.evaluate(() => {
+        const buttons = document.querySelectorAll('button');
+        for (const btn of buttons) {
+          if (btn.textContent.includes('Send') || btn.textContent.includes('Login') || btn.textContent.includes('OTP') || btn.textContent.includes('تسجيل')) {
+            btn.click(); return;
+          }
+        }
+      });
+    }
+
+    console.log('[Mzad] OTP request sent, waiting for delivery...');
+    await delay(10000);
+
+    // Read OTP from Gmail
+    const otp = await readOtpFromGmail('mzad');
+    if (!otp) throw new Error('Mzad: Could not retrieve OTP from Gmail');
+    console.log('[Mzad] Got OTP:', otp);
+
+    // Look for OTP input field
+    await page.waitForSelector('input[name="otp"], input[type="number"], input[placeholder*="code"], input[placeholder*="OTP"], input[maxlength="6"]', { timeout: 15000 }).catch(() => {});
+
+    // Type OTP
+    const otpInput = await page.$('input[name="otp"], input[type="number"], input[placeholder*="code"], input[placeholder*="OTP"], input[maxlength="6"]');
+    if (otpInput) {
+      await otpInput.click({ clickCount: 3 });
+      await otpInput.type(otp, { delay: 50 });
+    } else {
+      await page.evaluate((code) => {
+        const inputs = document.querySelectorAll('input');
+        for (const inp of inputs) {
+          if (inp.name === 'otp' || inp.type === 'number' || inp.placeholder?.toLowerCase().includes('code')) {
+            inp.value = code;
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+          }
+        }
+      }, otp);
+    }
+
+    // Solve reCAPTCHA again for verify
+    const recaptchaToken2 = await solveRecaptchaV3('login');
+    if (recaptchaToken2) {
+      await page.evaluate((token) => {
+        const el = document.getElementById('g-recaptcha-response');
+        if (el) el.value = token;
+        const textarea = document.querySelector('textarea[name="g-recaptcha-response"]');
+        if (textarea) textarea.value = token;
+      }, recaptchaToken2);
+    }
+
+    // Click verify/submit
+    console.log('[Mzad] Submitting OTP...');
+    const verifyBtn = await page.$('button[type="submit"], button.btn-primary, form button');
+    if (verifyBtn) {
+      await verifyBtn.click();
+    } else {
+      await page.evaluate(() => {
+        const buttons = document.querySelectorAll('button');
+        for (const btn of buttons) {
+          if (btn.textContent.includes('Verify') || btn.textContent.includes('Submit') || btn.textContent.includes('Login') || btn.textContent.includes('تحقق')) {
+            btn.click(); return;
+          }
+        }
+      });
+    }
+
+    // Wait for navigation to dashboard/home after login
+    await delay(5000);
+    console.log('[Mzad] After OTP submit, URL:', page.url());
+
+    // Extract cookies from browser
+    const cookies = await page.cookies();
+    let session = '', xsrf = '';
+    const extraCookies = {};
+    for (const c of cookies) {
+      if (c.name === 'mzadqatar_session') session = c.value;
+      else if (c.name === 'XSRF-TOKEN') xsrf = c.value;
+      else if (c.name === 'cf_clearance' || c.name.startsWith('__cf')) extraCookies[c.name] = c.value;
+    }
+
+    console.log('[Mzad] Extracted cookies: session=' + session.length + ' chars, xsrf=' + xsrf.length + ' chars, cf cookies=' + Object.keys(extraCookies).length);
+
+    if (!session || !xsrf) {
+      throw new Error('Mzad: No session cookies after Puppeteer login. URL=' + page.url());
+    }
+
+    process.env.MZAD_SESSION = session;
+    process.env.MZAD_XSRF_TOKEN = xsrf;
+    // Store CF cookies for use in API requests
+    process.env.MZAD_CF_COOKIES = JSON.stringify(extraCookies);
+
+    // Validate session
+    const loginValid = await isSessionValid(session, xsrf);
+    if (!loginValid) {
+      console.error('[Mzad] Puppeteer login completed but session not valid for add_advertise');
+      console.error('[Mzad] Current URL:', page.url());
+      const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 500));
+      console.error('[Mzad] Page text:', bodyText);
+      throw new Error('Mzad Puppeteer login session not authenticated. URL=' + page.url());
+    }
+
+    console.log('[Mzad] Puppeteer login successful and validated! ✓');
+    return { session, xsrf, csrfToken: decodedXsrf(xsrf), extraCookies };
+  } finally {
+    await browser.close().catch(() => {});
+    console.log('[Mzad] Browser closed');
   }
-
-  console.log('[Mzad] OTP login successful and session validated!');
-  return { session: finalSession, xsrf: finalXsrf, csrfToken: decodedXsrf(finalXsrf) };
 }
 
 // ─────────────────────────────────────────────
