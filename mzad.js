@@ -343,7 +343,7 @@ async function loginWithOtp() {
           'X-XSRF-TOKEN': csrfToken,
           'Accept': 'text/html, application/xhtml+xml',
         },
-        body: JSON.stringify({ phone: ph, recaptchaToken: token || '' }),
+        body: JSON.stringify({ phone: ph, otp: '', countryId: 176, countryCode: '974', recaptchaToken: token || '' }),
         credentials: 'include',
       });
       const text = await res.text();
@@ -392,9 +392,11 @@ async function loginWithOtp() {
   }
 
   console.log('[Mzad] Verifying OTP:', otp);
-  const verifyRes = await page.evaluate(async (baseUrl, ph, otpCode, token, csrfToken, ver) => {
+  // Build individual OTP digit fields (otp_0 through otp_5) as Mzad expects
+  const otpDigits = otp.toString().padEnd(6, '0').split('').slice(0, 6);
+  const verifyRes = await page.evaluate(async (baseUrl, ph, otpCode, digits, csrfToken, ver) => {
     try {
-      const res = await fetch(baseUrl + '/en/login', {
+      const res = await fetch(baseUrl + '/en/login-verify', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -404,7 +406,14 @@ async function loginWithOtp() {
           'X-XSRF-TOKEN': csrfToken,
           'Accept': 'text/html, application/xhtml+xml',
         },
-        body: JSON.stringify({ phone: ph, otp: otpCode, recaptchaToken: token || '' }),
+        body: JSON.stringify({
+          otp_0: digits[0], otp_1: digits[1], otp_2: digits[2],
+          otp_3: digits[3], otp_4: digits[4], otp_5: digits[5],
+          otp: otpCode,
+          username: ph,
+          countryId: 176,
+          countryCode: '974',
+        }),
         credentials: 'include',
       });
       const text = await res.text();
@@ -412,7 +421,7 @@ async function loginWithOtp() {
     } catch (e) {
       return { ok: false, error: e.message };
     }
-  }, BASE_URL, phone, otp, recaptchaToken2, csrf2, inertiaVer);
+  }, BASE_URL, phone, otp, otpDigits, csrf2, inertiaVer);
   console.log('[Mzad] OTP verify result:', JSON.stringify(verifyRes));
 
   // ── Step E: Validate by navigating to add_advertise ──
