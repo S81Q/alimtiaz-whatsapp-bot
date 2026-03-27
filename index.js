@@ -522,6 +522,119 @@ app.get('/poster-status', (req, res) => {
 
 // ══════════════════════════════════════════════════════
 
+// Test Mzad login (CF bypass + auth)
+app.get('/test-mzad-login', async (req, res) => {
+  try {
+    const { getSession } = require('./mzad');
+    console.log('[test-mzad-login] Starting Mzad login test...');
+    const session = await getSession();
+    console.log('[test-mzad-login] Session result:', JSON.stringify(session ? { hasSession: true, keys: Object.keys(session) } : null));
+    res.json({ status: 'ok', session: session ? { hasSession: true, keys: Object.keys(session) } : null });
+  } catch (e) {
+    console.error('[test-mzad-login] Error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+// Debug Mzad — uses Puppeteer-based postAd with a test property
+app.get('/debug-mzad-steps', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    // Force fresh login if ?fresh=1
+    if (req.query.fresh === '1') {
+      console.log('[debug-mzad] Forcing fresh login...');
+      delete process.env.MZAD_SESSION;
+      delete process.env.MZAD_XSRF_TOKEN;
+    }
+    console.log('[debug-mzad] Getting session...');
+    const session = await mzad.getSession();
+    if (!session) return res.status(500).json({ error: 'No session' });
+
+    // Build a test property object
+    const testProperty = {
+      Unit: 'DEBUG-1',
+      Type: 'Apartment',
+      Location: 'Doha',
+      Region: 'D-Ring',
+      Bedrooms: '2',
+      Bathrooms: '2',
+      Size_sqm: '100',
+      Floor: '1',
+      Rent_QAR: '5000',
+      Maps_Link: '',
+      Notes: '',
+    };
+
+    console.log('[debug-mzad] Running Puppeteer postAd...');
+    const result = await mzad.postAd(testProperty, session);
+    res.json({ status: 'done', result });
+  } catch (e) {
+    console.error('[debug-mzad] Error:', e.message);
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
+// Check if ad was posted by viewing user's ads via bot session
+app.get('/check-my-ads', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const axios = require('axios');
+    const session = await mzad.getSession();
+    if (!session) return res.status(500).json({ error: 'No session' });
+
+    const { session: sess, xsrf, csrfToken, extraCookies } = session;
+    const cookies = [`mzadqatar_session=${sess}`, `XSRF-TOKEN=${xsrf}`];
+    if (extraCookies) {
+      for (const [k, v] of Object.entries(extraCookies)) cookies.push(`${k}=${v}`);
+    }
+
+    const headers = {
+      'Cookie': cookies.join('; '),
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html, application/xhtml+xml',
+    };
+
+    // First get the page HTML to extract Inertia data
+    const r = await axios.get('https://mzadqatar.com/en/user/profile/myads', {
+      headers,
+      validateStatus: s => s < 600,
+    });
+
+    // Parse Inertia props from HTML
+    let props = {};
+    if (typeof r.data === 'string') {
+      const match = r.data.match(/data-page="([^"]+)"/);
+      if (match) {
+        try {
+          const pageData = JSON.parse(match[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+          props = pageData.props || {};
+        } catch(e) {}
+      }
+    } else {
+      props = r.data?.props || {};
+    }
+
+    const userData = props.classifiedUserData;
+    const myAds = props.myProductsData || props.myAds;
+
+    res.json({
+      status: r.status,
+      userName: userData?.name || userData?.phone,
+      adsCount: myAds?.data?.length || myAds?.total || 0,
+      ads: myAds?.data?.slice(0, 5).map(a => ({
+        id: a.productId || a.id,
+        title: a.productName || a.productNameEnglish || a.title,
+        price: a.productPrice || a.price,
+        status: a.status,
+        createdAt: a.created_at || a.createdAt,
+        url: a.productUrl || a.url,
+      })) || [],
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
