@@ -121,6 +121,7 @@ async function runPosting(opts = {}) {
         const adUrl = adId ? `https://mzadqatar.com/en/ad/${adId}` : '';
         await logAdResult({ unit, platform: 'Mzad', status: 'Success', adUrl });
         summary.mzadPosted++;
+        summary.mzadDebug = result;
         console.log(`[Poster] Mzad ✓ unit=${unit}`, adUrl || '(no URL in response)');
       } catch (e) {
         console.error(`[Poster] Mzad ✗ unit=${unit}:`, e.message);

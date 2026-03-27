@@ -456,13 +456,26 @@ async function postAd(property, sessionData) {
     console.log('[Mzad] Step 3 JSON response status:', step3JsonRes.status);
     console.log('[Mzad] Step 3 JSON response data:', JSON.stringify(step3JsonRes.data).substring(0, 1000));
     if (step3JsonRes.status >= 400) {
-      throw new Error(`Mzad Step 3 failed: status=${step3JsonRes.status}`);
+      throw new Error(`Mzad Step 3 failed: status=${step3JsonRes.status} body=${JSON.stringify(step3JsonRes.data).substring(0, 500)}`);
     }
-    return step3JsonRes.data;
+    return {
+      success: true,
+      unit: property.Unit,
+      method: 'json_base64_fallback',
+      step1: { status: step1Res.status },
+      step2: { status: step2Res.status },
+      step3: { status: step3JsonRes.status, data: JSON.stringify(step3JsonRes.data).substring(0, 1500) },
+    };
   }
 
   console.log(`[Mzad] ===== Ad posted successfully for unit ${property.Unit}! =====`);
-  return step3Res.data;
+  return {
+    success: true,
+    unit: property.Unit,
+    step1: { status: step1Res.status, data: JSON.stringify(step1Res.data).substring(0, 500) },
+    step2: { status: step2Res.status, data: JSON.stringify(step2Res.data).substring(0, 500) },
+    step3: { status: step3Res.status, data: JSON.stringify(step3Res.data).substring(0, 1500) },
+  };
 }
 
 module.exports = { getSession, postAd };
