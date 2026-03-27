@@ -354,6 +354,15 @@ async function loginWithOtp() {
   }, BASE_URL, phone, recaptchaToken1, csrf, inertiaVer);
   console.log('[Mzad] OTP request result:', JSON.stringify(otpRes));
 
+  // Check for rate limiting
+  if (otpRes.body && otpRes.body.includes('three times in one hour')) {
+    console.warn('[Mzad] Rate limited! Mzad says: wait 1 hour. Will retry in 20 minutes...');
+    await delay(20 * 60 * 1000); // wait 20 min then retry
+    // Reload page and retry recursively
+    await page.goto(`${BASE_URL}/en/login`, { waitUntil: 'networkidle2', timeout: 60000 });
+    return await loginWithOtp();
+  }
+
   if (!otpRes.ok || otpRes.status >= 400) {
     throw new Error(`Mzad OTP request failed: ${JSON.stringify(otpRes)}`);
   }
@@ -414,6 +423,14 @@ async function loginWithOtp() {
   console.log('[Mzad] add_advertise URL:', finalUrl);
 
   if (finalUrl.includes('/login')) {
+    // Check if verify response had errors
+    const verifyBody = verifyRes.body || '';
+    if (verifyBody.includes('three times in one hour')) {
+      console.warn('[Mzad] Rate limited during verify. Waiting 20 min...');
+      await delay(20 * 60 * 1000);
+      await page.goto(`${BASE_URL}/en/login`, { waitUntil: 'networkidle2', timeout: 60000 });
+      return await loginWithOtp();
+    }
     throw new Error('Mzad login failed: not authenticated after OTP verify. verify=' + JSON.stringify(verifyRes));
   }
 
