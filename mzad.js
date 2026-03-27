@@ -711,6 +711,7 @@ async function postAd(property, sessionData) {
       const res = await fetch(url, {
         method: 'POST',
         headers: {
+          'Accept': 'text/html, application/xhtml+xml',
           'X-Requested-With': 'XMLHttpRequest',
           'X-Inertia': 'true',
           'X-Inertia-Version': inertiaVer,
@@ -722,7 +723,7 @@ async function postAd(property, sessionData) {
       const text = await res.text();
       let json = null;
       try { json = JSON.parse(text); } catch {}
-      return { status: res.status, data: json ? { component: json.component, props_keys: Object.keys(json.props || {}), errors: json.props?.errors, step: json.props?.step, flash: json.props?.flash, url: json.url, getAddAdvertiseData: json.props?.getAddAdvertiseData ? { step: json.props.getAddAdvertiseData.prevData?.step, adsSelectedData: json.props.getAddAdvertiseData.adsSelectedData } : null, currencies: json.props?.settingsData?.currencies?.slice(0, 3) } : text.substring(0, 500), fullLen: text.length, isJson: !!json };
+      return { status: res.status, data: json ? { component: json.component, props_keys: Object.keys(json.props || {}), errors: json.props?.errors, step: json.props?.step, flash: json.props?.flash, url: json.url, redirectBackData: json.props?.redirectBackData || null, getAddAdvertiseData: json.props?.getAddAdvertiseData ? { step: json.props.getAddAdvertiseData.prevData?.step, prevData: json.props.getAddAdvertiseData.prevData, adsSelectedData: json.props.getAddAdvertiseData.adsSelectedData, apiData_keys: json.props.getAddAdvertiseData.apiData ? Object.keys(json.props.getAddAdvertiseData.apiData) : null } : null, currencies: json.props?.settingsData?.currencies?.slice(0, 3) } : text.substring(0, 500), fullLen: text.length, isJson: !!json };
     }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver,
        { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, step2Data, currencyId);
     // Wrap to match expected format
