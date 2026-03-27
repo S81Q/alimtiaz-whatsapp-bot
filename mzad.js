@@ -645,10 +645,35 @@ async function postAd(property, sessionData) {
 
   let step3Res;
   if (_page) {
+
+  // Extract currencyId from page Inertia props
+  let currencyId = 1; // default fallback
+  try {
+    currencyId = await _page.evaluate(() => {
+      try {
+        const el = document.querySelector("[data-page]");
+        if (el) {
+          const pageData = JSON.parse(el.getAttribute("data-page"));
+          const currencies = pageData?.props?.settingsData?.currencies;
+          if (currencies && currencies.length > 0) return currencies[0].id;
+        }
+        // Fallback: try Vue app internal state
+        const app = document.querySelector("#app")?.__vue_app__;
+        if (app) {
+          const props = app.config?.globalProperties?.$page?.props;
+          if (props?.settingsData?.currencies?.[0]?.id) return props.settingsData.currencies[0].id;
+        }
+      } catch(e) {}
+      return null;
+    });
+    console.log("[Mzad] Extracted currencyId:", currencyId);
+  } catch(e) {
+    console.warn("[Mzad] Could not extract currencyId, using default:", e.message);
+  }
     console.log('[Mzad] Step 3: Using browser fetch with FormData...');
     const csrf = decodedXsrf(xsrf);
     const ver = _inertiaVersion || '';
-    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer, s1Data, s2Data) => {
+    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer, s1Data, s2Data, curId) => {
       // Convert base64 to Blob
       const byteChars = atob(imgB64);
       const byteArr = new Uint8Array(byteChars.length);
@@ -673,6 +698,9 @@ async function postAd(property, sessionData) {
       fd.append('step3Data[productDescriptionArabic]', dAr);
       fd.append('step3Data[autoRenew]', '0');
       fd.append('step3Data[agree_commission]', '1');
+      fd.append('step3Data[currencyId]', String(curId || 1));
+      fd.append('step3Data[isResetImages]', '0');
+      fd.append('step3Data[productId]', '');
       fd.append('step3Data[images][]', blob, 'property.jpg');
 
       const res = await fetch(url, {
@@ -689,9 +717,9 @@ async function postAd(property, sessionData) {
       const text = await res.text();
       let json = null;
       try { json = JSON.parse(text); } catch {}
-      return { status: res.status, data: json ? { component: json.component, props_keys: Object.keys(json.props || {}), errors: json.props?.errors, step: json.props?.step, flash: json.props?.flash, url: json.url } : text.substring(0, 500), fullLen: text.length, isJson: !!json };
+      return { status: res.status, data: json ? { component: json.component, props_keys: Object.keys(json.props || {}), errors: json.props?.errors, step: json.props?.step, flash: json.props?.flash, url: json.url, getAddAdvertiseData: json.props?.getAddAdvertiseData ? { step: json.props.getAddAdvertiseData.prevData?.step, adsSelectedData: json.props.getAddAdvertiseData.adsSelectedData } : null, currencies: json.props?.settingsData?.currencies?.slice(0, 3) } : text.substring(0, 500), fullLen: text.length, isJson: !!json };
     }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver,
-       { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, step2Data);
+       { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, step2Data, currencyId);
     // Wrap to match expected format
     step3Res = { status: step3Res.status, data: step3Res.data };
   } else {
