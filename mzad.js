@@ -672,10 +672,11 @@ async function postAd(property, sessionData) {
   const imgBase64 = imgBuffer.toString('base64');
 
   let step3Res;
+  let currencyId = 1; // default fallback (hoisted for resubmit access)
   if (_page) {
 
   // Extract currencyId from page Inertia props
-  let currencyId = 1; // default fallback
+  currencyId = 1;
   try {
     currencyId = await _page.evaluate(() => {
       try {
