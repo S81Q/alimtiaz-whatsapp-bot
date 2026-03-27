@@ -635,6 +635,20 @@ app.get('/check-my-ads', async (req, res) => {
   }
 });
 
+// Test Gmail OTP reader
+app.get('/test-gmail', async (req, res) => {
+  try {
+    const { readOtpFromGmail } = require('./gmail-otp');
+    console.log('[test-gmail] Testing Gmail OAuth and OTP search...');
+    const minTs = Date.now() - 10 * 60 * 1000; // last 10 min
+    const otp = await readOtpFromGmail('mzad', 2, 3000, minTs);
+    res.json({ ok: true, otp: otp || 'none found', timestamp: new Date().toISOString() });
+  } catch (e) {
+    console.error('[test-gmail] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
