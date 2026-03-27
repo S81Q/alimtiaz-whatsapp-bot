@@ -654,7 +654,7 @@ async function postAd(property, sessionData) {
     console.log('[Mzad] Step 3: Using browser fetch with FormData...');
     const csrf = decodedXsrf(xsrf);
     const ver = _inertiaVersion || '';
-    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer) => {
+    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer, s1Data, s2Data) => {
       // Convert base64 to Blob
       const byteChars = atob(imgB64);
       const byteArr = new Uint8Array(byteChars.length);
@@ -663,6 +663,15 @@ async function postAd(property, sessionData) {
 
       const fd = new FormData();
       fd.append('step', '3');
+      // Include step1Data
+      for (const [k, v] of Object.entries(s1Data || {})) {
+        fd.append('step1Data[' + k + ']', String(v));
+      }
+      // Include step2Data
+      for (const [k, v] of Object.entries(s2Data || {})) {
+        fd.append('step2Data[' + k + ']', String(v));
+      }
+      // step3Data
       fd.append('step3Data[productPrice]', String(p));
       fd.append('step3Data[productNameEnglish]', tEn);
       fd.append('step3Data[productDescriptionEnglish]', dEn);
@@ -687,7 +696,8 @@ async function postAd(property, sessionData) {
       let json = null;
       try { json = JSON.parse(text); } catch {}
       return { status: res.status, data: json || text };
-    }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver);
+    }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver,
+       { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, step2Data);
     // Wrap to match expected format
     step3Res = { status: step3Res.status, data: step3Res.data };
   } else {
