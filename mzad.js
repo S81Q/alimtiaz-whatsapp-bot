@@ -240,13 +240,28 @@ async function loginWithOtp() {
 
   // Validate the session actually works
   console.log('[Mzad] Verifying login session is authenticated...');
+  console.log('[Mzad] OTP request status:', otpReqRes.status);
+  console.log('[Mzad] OTP request data (500):', JSON.stringify(otpReqRes.data).substring(0, 500));
   console.log('[Mzad] Verify OTP response status:', verifyRes.status);
-  console.log('[Mzad] Verify OTP response data (first 500):', JSON.stringify(verifyRes.data).substring(0, 500));
+  console.log('[Mzad] Verify OTP response headers set-cookie count:', (verifyRes.headers['set-cookie'] || []).length);
+  console.log('[Mzad] Verify OTP response data (500):', JSON.stringify(verifyRes.data).substring(0, 500));
+  console.log('[Mzad] Final session length:', finalSession.length, 'Final xsrf length:', finalXsrf.length);
   const loginValid = await isSessionValid(finalSession, finalXsrf);
   if (!loginValid) {
-    console.error('[Mzad] WARNING: Login completed but session is NOT valid for add_advertise!');
-    console.error('[Mzad] OTP verify status was:', verifyRes.status);
-    throw new Error('Mzad login OTP verification succeeded but session is not authenticated');
+    // Return debug info instead of just throwing
+    const debugInfo = {
+      otpReqStatus: otpReqRes.status,
+      otpReqData: JSON.stringify(otpReqRes.data).substring(0, 300),
+      verifyStatus: verifyRes.status,
+      verifyData: JSON.stringify(verifyRes.data).substring(0, 300),
+      finalSessionLen: finalSession.length,
+      finalXsrfLen: finalXsrf.length,
+      otp: otp,
+      recaptcha1: recaptchaToken1 ? 'solved' : 'null',
+      recaptcha2: recaptchaToken2 ? 'solved' : 'null',
+    };
+    console.error('[Mzad] LOGIN DEBUG:', JSON.stringify(debugInfo));
+    throw new Error('Mzad login failed: session not authenticated. Debug: ' + JSON.stringify(debugInfo));
   }
 
   console.log('[Mzad] OTP login successful and session validated!');
