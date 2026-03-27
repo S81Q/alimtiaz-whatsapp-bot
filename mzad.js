@@ -462,6 +462,16 @@ async function postAd(property, sessionData) {
   console.log(`[Mzad] ===== Posting ad for unit ${property.Unit} =====`);
   console.log(`[Mzad] Type: ${property.Type} | Category: ${categoryId} | Commercial: ${isComm}`);
 
+  // Navigate browser to add_advertise page first (sets correct Inertia version + context)
+  if (_page) {
+    console.log('[Mzad] Navigating browser to add_advertise page...');
+    await _page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 30000 });
+    console.log('[Mzad] On add_advertise page, URL:', _page.url());
+    if (_page.url().includes('/login')) {
+      throw new Error('Mzad: Redirected to login from add_advertise — session expired');
+    }
+  }
+
   // ── STEP 1: Language + Category ──
   console.log('[Mzad] Step 1: Submitting language + category...');
   const step1Res = await inertiaPost(`${BASE_URL}/en/add_advertise`, {
@@ -477,9 +487,13 @@ async function postAd(property, sessionData) {
   if (step1Res.cookies['mzadqatar_session']) session = step1Res.cookies['mzadqatar_session'];
   if (step1Res.cookies['XSRF-TOKEN']) xsrf = step1Res.cookies['XSRF-TOKEN'];
 
-  if (step1Res.status >= 300) {
-    throw new Error(`Mzad Step 1 failed (redirect/error): status=${step1Res.status} — session likely expired. Body=${JSON.stringify(step1Res.data).substring(0, 300)}`);
+  if (step1Res.status === 301 || step1Res.status === 302) {
+    throw new Error(`Mzad Step 1 redirected to login: status=${step1Res.status}`);
   }
+  if (step1Res.status >= 400 && step1Res.status !== 409) {
+    throw new Error(`Mzad Step 1 failed: status=${step1Res.status} body=${JSON.stringify(step1Res.data).substring(0, 300)}`);
+  }
+  console.log('[Mzad] Step 1 data:', JSON.stringify(step1Res.data).substring(0, 500));
 
   // ── STEP 2: Property details ──
   console.log('[Mzad] Step 2: Submitting property details...');
@@ -522,9 +536,13 @@ async function postAd(property, sessionData) {
   if (step2Res.cookies['mzadqatar_session']) session = step2Res.cookies['mzadqatar_session'];
   if (step2Res.cookies['XSRF-TOKEN']) xsrf = step2Res.cookies['XSRF-TOKEN'];
 
-  if (step2Res.status >= 300) {
-    throw new Error(`Mzad Step 2 failed (redirect/error): status=${step2Res.status}`);
+  if (step2Res.status === 301 || step2Res.status === 302) {
+    throw new Error(`Mzad Step 2 redirected: status=${step2Res.status}`);
   }
+  if (step2Res.status >= 400 && step2Res.status !== 409) {
+    throw new Error(`Mzad Step 2 failed: status=${step2Res.status} body=${JSON.stringify(step2Res.data).substring(0, 300)}`);
+  }
+  console.log('[Mzad] Step 2 data:', JSON.stringify(step2Res.data).substring(0, 500));
 
   // ── STEP 3: Title, Description, Price, Image, Publish ──
   console.log('[Mzad] Step 3: Submitting ad content + publish...');
