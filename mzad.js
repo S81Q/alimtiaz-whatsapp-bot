@@ -131,6 +131,7 @@ async function inertiaPost(url, data, session, xsrf) {
   if (_page) {
     try {
       const csrf = decodedXsrf(xsrf);
+      const ver = _inertiaVersion || '';
       const res = await browserFetch(_page, url, {
         method: 'POST',
         headers: {
@@ -138,7 +139,7 @@ async function inertiaPost(url, data, session, xsrf) {
           'Accept': 'text/html, application/xhtml+xml',
           'X-Requested-With': 'XMLHttpRequest',
           'X-Inertia': 'true',
-          'X-Inertia-Version': '',
+          'X-Inertia-Version': ver,
           'X-XSRF-TOKEN': csrf,
         },
         body: JSON.stringify(data),
@@ -207,7 +208,7 @@ async function isSessionValid(session, xsrf) {
     if (_page) {
       const res = await browserFetch(_page, `${BASE_URL}/en/add_advertise`, {
         method: 'GET',
-        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Inertia': 'true', 'Accept': 'text/html, application/xhtml+xml' },
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Inertia': 'true', 'X-Inertia-Version': _inertiaVersion || '', 'Accept': 'text/html, application/xhtml+xml' },
         credentials: 'include',
       });
       const isValid = res.status === 200 && !res.body.includes('/login');
@@ -271,6 +272,24 @@ async function closeBrowser() {
   if (_browser) { await _browser.close().catch(() => {}); _browser = null; _page = null; }
 }
 
+// Extract Inertia page version from the loaded page
+let _inertiaVersion = '';
+async function getInertiaVersion(page) {
+  if (_inertiaVersion) return _inertiaVersion;
+  try {
+    _inertiaVersion = await page.evaluate(() => {
+      const el = document.querySelector('[data-page]');
+      if (!el) return '';
+      try {
+        const pageData = JSON.parse(el.getAttribute('data-page'));
+        return pageData.version || '';
+      } catch { return ''; }
+    });
+    console.log('[Mzad] Inertia version:', _inertiaVersion || '(empty)');
+  } catch {}
+  return _inertiaVersion;
+}
+
 // Make a fetch() call from INSIDE the Puppeteer browser (inherits CF clearance + TLS)
 async function browserFetch(page, url, options) {
   return await page.evaluate(async (u, opts) => {
@@ -298,6 +317,9 @@ async function loginWithOtp() {
   const csrf = decodedXsrf(xsrf);
   console.log('[Mzad] XSRF token from browser:', xsrf.length, 'chars');
 
+  // Get Inertia version from the loaded page
+  const inertiaVer = await getInertiaVersion(page);
+
   // Solve reCAPTCHA
   const recaptchaToken1 = await solveRecaptchaV3('login');
   console.log('[Mzad] Sending OTP request to phone', phone);
@@ -309,6 +331,7 @@ async function loginWithOtp() {
       'Content-Type': 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true',
+      'X-Inertia-Version': inertiaVer,
       'X-XSRF-TOKEN': csrf,
       'Accept': 'text/html, application/xhtml+xml',
     },
@@ -348,6 +371,7 @@ async function loginWithOtp() {
       'Content-Type': 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true',
+      'X-Inertia-Version': inertiaVer,
       'X-XSRF-TOKEN': csrf2,
       'Accept': 'text/html, application/xhtml+xml',
     },
@@ -378,6 +402,7 @@ async function loginWithOtp() {
     headers: {
       'X-Requested-With': 'XMLHttpRequest',
       'X-Inertia': 'true',
+      'X-Inertia-Version': inertiaVer,
       'Accept': 'text/html, application/xhtml+xml',
     },
     credentials: 'include',
@@ -465,11 +490,13 @@ async function postAd(property, sessionData) {
   // Navigate browser to add_advertise page first (sets correct Inertia version + context)
   if (_page) {
     console.log('[Mzad] Navigating browser to add_advertise page...');
+    _inertiaVersion = ''; // Reset to get fresh version
     await _page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 30000 });
     console.log('[Mzad] On add_advertise page, URL:', _page.url());
     if (_page.url().includes('/login')) {
       throw new Error('Mzad: Redirected to login from add_advertise — session expired');
     }
+    await getInertiaVersion(_page);
   }
 
   // ── STEP 1: Language + Category ──
