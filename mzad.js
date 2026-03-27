@@ -547,7 +547,9 @@ async function postAd(property, sessionData) {
       categoryId: categoryId,
       lang: 'aren',          // Both Arabic and English
       mzadyUserNumber: '',
-    }
+    },
+    step2Data: {},
+    step3Data: {},
   }, session, xsrf);
 
   console.log('[Mzad] Step 1 response status:', step1Res.status);
@@ -596,7 +598,9 @@ async function postAd(property, sessionData) {
   console.log('[Mzad] Step 2 data:', JSON.stringify(step2Data));
   const step2Res = await inertiaPost(`${BASE_URL}/en/add_advertise`, {
     step: 2,
+    step1Data: { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' },
     step2Data: step2Data,
+    step3Data: {},
   }, session, xsrf);
 
   console.log('[Mzad] Step 2 response status:', step2Res.status);
