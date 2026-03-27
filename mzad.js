@@ -368,9 +368,9 @@ async function loginWithOtp() {
   }
 
   // ── Step C: Wait for OTP and read from Gmail ──
-  console.log('[Mzad] Waiting 12s for OTP delivery...');
-  await delay(12000);
-  const otp = await readOtpFromGmail('mzad');
+  console.log('[Mzad] Waiting 5s for OTP delivery...');
+  await delay(5000);
+  const otp = await readOtpFromGmail('mzad', 8, 5000);
   if (!otp) throw new Error('Mzad: Could not retrieve OTP from Gmail');
   console.log('[Mzad] Got OTP:', otp);
 
@@ -379,17 +379,6 @@ async function loginWithOtp() {
   let xsrf2 = '';
   for (const c of cookies2) { if (c.name === 'XSRF-TOKEN') xsrf2 = c.value; }
   const csrf2 = decodedXsrf(xsrf2 || xsrf);
-
-  let recaptchaToken2 = null;
-  try {
-    recaptchaToken2 = await page.evaluate(async (siteKey) => {
-      return await grecaptcha.execute(siteKey, { action: 'login' });
-    }, MZAD_RECAPTCHA_SITE_KEY);
-    console.log('[Mzad] Browser reCAPTCHA token 2 obtained');
-  } catch (e) {
-    console.warn('[Mzad] Browser reCAPTCHA 2 failed:', e.message);
-    recaptchaToken2 = await solveRecaptchaV3('login');
-  }
 
   console.log('[Mzad] Verifying OTP:', otp);
   // Build individual OTP digit fields (otp_0 through otp_5) as Mzad expects
