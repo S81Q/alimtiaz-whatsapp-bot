@@ -306,159 +306,115 @@ async function loginWithOtp() {
   const page = await getBrowserPage();
   console.log('[Mzad] On login page, URL:', page.url());
 
-  // ── Step A: Type phone number into form ──
-  console.log('[Mzad] Looking for phone input...');
-  // Wait for any input field
-  await page.waitForSelector('input', { timeout: 15000 }).catch(() => {});
+  // Get Inertia version + XSRF from login page
+  const inertiaVer = await getInertiaVersion(page);
+  const cookies = await page.cookies();
+  let xsrf = '';
+  for (const c of cookies) { if (c.name === 'XSRF-TOKEN') xsrf = c.value; }
+  const csrf = decodedXsrf(xsrf);
+  console.log('[Mzad] XSRF:', xsrf.length, 'chars, Inertia ver:', inertiaVer || '(none)');
 
-  // Find and fill phone input using page.evaluate for Vue reactivity
-  const phoneTyped = await page.evaluate((ph) => {
-    // Try various selectors
-    const selectors = ['input[type="tel"]', 'input[name="phone"]', 'input[placeholder*="phone" i]', 'input[placeholder*="Phone"]', 'input[placeholder*="رقم" ]'];
-    let input = null;
-    for (const sel of selectors) {
-      input = document.querySelector(sel);
-      if (input) break;
+  // ── Step A: Get reCAPTCHA token from browser context ──
+  console.log('[Mzad] Executing grecaptcha in browser...');
+  let recaptchaToken1 = null;
+  try {
+    // Wait for grecaptcha to be ready
+    await page.waitForFunction(() => typeof grecaptcha !== 'undefined' && typeof grecaptcha.execute === 'function', { timeout: 10000 });
+    recaptchaToken1 = await page.evaluate(async (siteKey) => {
+      return await grecaptcha.execute(siteKey, { action: 'login' });
+    }, MZAD_RECAPTCHA_SITE_KEY);
+    console.log('[Mzad] Browser reCAPTCHA token obtained:', recaptchaToken1 ? recaptchaToken1.substring(0, 30) + '...' : 'null');
+  } catch (e) {
+    console.warn('[Mzad] Browser reCAPTCHA failed:', e.message, '- falling back to 2captcha');
+    recaptchaToken1 = await solveRecaptchaV3('login');
+  }
+
+  // ── Step B: Send OTP via browser fetch ──
+  console.log('[Mzad] Sending OTP request for phone:', phone);
+  const otpRes = await page.evaluate(async (baseUrl, ph, token, csrfToken, ver) => {
+    try {
+      const res = await fetch(baseUrl + '/en/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Inertia': 'true',
+          'X-Inertia-Version': ver || '',
+          'X-XSRF-TOKEN': csrfToken,
+          'Accept': 'text/html, application/xhtml+xml',
+        },
+        body: JSON.stringify({ phone: ph, recaptchaToken: token || '' }),
+        credentials: 'include',
+      });
+      const text = await res.text();
+      return { status: res.status, body: text.substring(0, 500), ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
     }
-    if (!input) {
-      // Try first text/tel input
-      const inputs = document.querySelectorAll('input[type="text"], input[type="tel"], input:not([type])');
-      input = inputs[0];
-    }
-    if (!input) return { found: false, inputs: document.querySelectorAll('input').length };
+  }, BASE_URL, phone, recaptchaToken1, csrf, inertiaVer);
+  console.log('[Mzad] OTP request result:', JSON.stringify(otpRes));
 
-    // Set value with Vue reactivity
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    nativeInputValueSetter.call(input, ph);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    return { found: true, value: input.value };
-  }, phone);
-  console.log('[Mzad] Phone input result:', JSON.stringify(phoneTyped));
+  if (!otpRes.ok || otpRes.status >= 400) {
+    throw new Error(`Mzad OTP request failed: ${JSON.stringify(otpRes)}`);
+  }
 
-  // ── Step B: Click Send OTP button ──
-  console.log('[Mzad] Clicking send OTP button...');
-  // Wait a moment for reCAPTCHA to load
-  await delay(2000);
-
-  const clicked = await page.evaluate(() => {
-    const buttons = Array.from(document.querySelectorAll('button'));
-    // Find submit button
-    for (const btn of buttons) {
-      const text = (btn.textContent || '').toLowerCase();
-      if (text.includes('send') || text.includes('login') || text.includes('submit') ||
-          text.includes('تسجيل') || text.includes('دخول') || text.includes('إرسال') ||
-          btn.type === 'submit') {
-        btn.click();
-        return { clicked: true, text: btn.textContent.trim() };
-      }
-    }
-    // Fallback: click first button
-    if (buttons.length > 0) {
-      buttons[0].click();
-      return { clicked: true, text: buttons[0].textContent.trim(), fallback: true };
-    }
-    return { clicked: false };
-  });
-  console.log('[Mzad] Button click result:', JSON.stringify(clicked));
-
-  // Wait for form to process and OTP to be sent
-  console.log('[Mzad] Waiting for OTP delivery (15s)...');
-  await delay(15000);
-
-  // Check if an OTP input appeared (means phone step succeeded)
-  const pageState = await page.evaluate(() => {
-    const inputs = document.querySelectorAll('input');
-    const buttons = document.querySelectorAll('button');
-    return {
-      url: window.location.href,
-      inputCount: inputs.length,
-      inputTypes: Array.from(inputs).map(i => ({ type: i.type, name: i.name, placeholder: i.placeholder })),
-      buttonCount: buttons.length,
-      buttonTexts: Array.from(buttons).map(b => b.textContent.trim().substring(0, 50)),
-      bodyText: document.body.innerText.substring(0, 500),
-    };
-  });
-  console.log('[Mzad] Page state after OTP request:', JSON.stringify(pageState));
-
-  // ── Step C: Read OTP from Gmail ──
+  // ── Step C: Wait for OTP and read from Gmail ──
+  console.log('[Mzad] Waiting 12s for OTP delivery...');
+  await delay(12000);
   const otp = await readOtpFromGmail('mzad');
   if (!otp) throw new Error('Mzad: Could not retrieve OTP from Gmail');
   console.log('[Mzad] Got OTP:', otp);
 
-  // ── Step D: Type OTP into the form ──
-  const otpTyped = await page.evaluate((code) => {
-    const selectors = ['input[name="otp"]', 'input[type="number"]', 'input[placeholder*="code" i]',
-      'input[placeholder*="OTP" i]', 'input[placeholder*="رمز"]', 'input[maxlength="6"]', 'input[maxlength="4"]'];
-    let input = null;
-    for (const sel of selectors) {
-      input = document.querySelector(sel);
-      if (input) break;
-    }
-    if (!input) {
-      // Find inputs that are empty (the OTP field should be empty)
-      const inputs = document.querySelectorAll('input');
-      for (const inp of inputs) {
-        if (!inp.value && inp.type !== 'hidden') { input = inp; break; }
-      }
-    }
-    if (!input) return { found: false };
+  // ── Step D: Get fresh reCAPTCHA + XSRF, then verify OTP ──
+  const cookies2 = await page.cookies();
+  let xsrf2 = '';
+  for (const c of cookies2) { if (c.name === 'XSRF-TOKEN') xsrf2 = c.value; }
+  const csrf2 = decodedXsrf(xsrf2 || xsrf);
 
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    nativeInputValueSetter.call(input, code);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    return { found: true, value: input.value, name: input.name, type: input.type };
-  }, otp);
-  console.log('[Mzad] OTP input result:', JSON.stringify(otpTyped));
-
-  // ── Step E: Click Verify/Submit button ──
-  await delay(2000);
-  console.log('[Mzad] Clicking verify button...');
-  const verified = await page.evaluate(() => {
-    const buttons = Array.from(document.querySelectorAll('button'));
-    for (const btn of buttons) {
-      const text = (btn.textContent || '').toLowerCase();
-      if (text.includes('verify') || text.includes('submit') || text.includes('confirm') ||
-          text.includes('login') || text.includes('تحقق') || text.includes('تأكيد') ||
-          btn.type === 'submit') {
-        btn.click();
-        return { clicked: true, text: btn.textContent.trim() };
-      }
-    }
-    if (buttons.length > 0) {
-      buttons[buttons.length - 1].click();
-      return { clicked: true, text: buttons[buttons.length - 1].textContent.trim(), fallback: true };
-    }
-    return { clicked: false };
-  });
-  console.log('[Mzad] Verify click result:', JSON.stringify(verified));
-
-  // Wait for navigation after login
-  console.log('[Mzad] Waiting for login redirect...');
-  await delay(8000);
-
-  const postLoginUrl = page.url();
-  console.log('[Mzad] Post-login URL:', postLoginUrl);
-
-  // If still on login, try waiting for navigation event
-  if (postLoginUrl.includes('/login')) {
-    console.log('[Mzad] Still on login page, waiting longer...');
-    await delay(5000);
-    console.log('[Mzad] URL after extra wait:', page.url());
+  let recaptchaToken2 = null;
+  try {
+    recaptchaToken2 = await page.evaluate(async (siteKey) => {
+      return await grecaptcha.execute(siteKey, { action: 'login' });
+    }, MZAD_RECAPTCHA_SITE_KEY);
+    console.log('[Mzad] Browser reCAPTCHA token 2 obtained');
+  } catch (e) {
+    console.warn('[Mzad] Browser reCAPTCHA 2 failed:', e.message);
+    recaptchaToken2 = await solveRecaptchaV3('login');
   }
 
-  // Navigate to add_advertise to validate
-  console.log('[Mzad] Navigating to add_advertise...');
+  console.log('[Mzad] Verifying OTP:', otp);
+  const verifyRes = await page.evaluate(async (baseUrl, ph, otpCode, token, csrfToken, ver) => {
+    try {
+      const res = await fetch(baseUrl + '/en/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Inertia': 'true',
+          'X-Inertia-Version': ver || '',
+          'X-XSRF-TOKEN': csrfToken,
+          'Accept': 'text/html, application/xhtml+xml',
+        },
+        body: JSON.stringify({ phone: ph, otp: otpCode, recaptchaToken: token || '' }),
+        credentials: 'include',
+      });
+      const text = await res.text();
+      return { status: res.status, body: text.substring(0, 500), url: window.location.href, ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, BASE_URL, phone, otp, recaptchaToken2, csrf2, inertiaVer);
+  console.log('[Mzad] OTP verify result:', JSON.stringify(verifyRes));
+
+  // ── Step E: Validate by navigating to add_advertise ──
+  await delay(2000);
+  console.log('[Mzad] Navigating to add_advertise to validate...');
   await page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 30000 });
   const finalUrl = page.url();
   console.log('[Mzad] add_advertise URL:', finalUrl);
 
   if (finalUrl.includes('/login')) {
-    // Get page state for debugging
-    const debugState = await page.evaluate(() => document.body.innerText.substring(0, 300));
-    console.error('[Mzad] Login failed. Page text:', debugState);
-    throw new Error('Mzad login failed: not authenticated. URL=' + finalUrl);
+    throw new Error('Mzad login failed: not authenticated after OTP verify. verify=' + JSON.stringify(verifyRes));
   }
 
   // Get Inertia version from add_advertise page
