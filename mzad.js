@@ -204,15 +204,12 @@ async function getInitialCookies() {
 async function isSessionValid(session, xsrf) {
   if (!session || !xsrf) return false;
   try {
-    // If browser is available, use it (bypass CF)
+    // If browser is available, navigate to check
     if (_page) {
-      const res = await browserFetch(_page, `${BASE_URL}/en/add_advertise`, {
-        method: 'GET',
-        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-Inertia': 'true', 'X-Inertia-Version': _inertiaVersion || '', 'Accept': 'text/html, application/xhtml+xml' },
-        credentials: 'include',
-      });
-      const isValid = res.status === 200 && !res.body.includes('/login');
-      console.log('[Mzad] Session check (browser): status=' + res.status + ' valid=' + isValid);
+      await _page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 30000 });
+      const url = _page.url();
+      const isValid = !url.includes('/login');
+      console.log('[Mzad] Session check (browser): url=' + url + ' valid=' + isValid);
       return isValid;
     }
     // Fallback: axios
@@ -395,23 +392,21 @@ async function loginWithOtp() {
   process.env.MZAD_SESSION = finalSession;
   process.env.MZAD_XSRF_TOKEN = finalXsrf;
 
-  // Validate by trying to access add_advertise from browser
+  // Validate by navigating browser to add_advertise
   console.log('[Mzad] Validating session by navigating to add_advertise...');
-  const checkRes = await browserFetch(page, `${BASE_URL}/en/add_advertise`, {
-    method: 'GET',
-    headers: {
-      'X-Requested-With': 'XMLHttpRequest',
-      'X-Inertia': 'true',
-      'X-Inertia-Version': inertiaVer,
-      'Accept': 'text/html, application/xhtml+xml',
-    },
-    credentials: 'include',
-  });
-  console.log('[Mzad] add_advertise check status:', checkRes.status);
+  await page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 30000 });
+  const finalUrl = page.url();
+  console.log('[Mzad] After validation nav, URL:', finalUrl);
 
-  if (checkRes.status === 302 || checkRes.status === 301 || checkRes.body.includes('/login')) {
-    throw new Error('Mzad login: session not authenticated after OTP verify. Check status=' + checkRes.status);
+  if (finalUrl.includes('/login')) {
+    const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 300));
+    console.error('[Mzad] Login validation failed. Body:', bodyText);
+    throw new Error('Mzad login: session not authenticated. Redirected to: ' + finalUrl);
   }
+
+  // Grab fresh Inertia version from the add_advertise page
+  _inertiaVersion = '';
+  await getInertiaVersion(page);
 
   console.log('[Mzad] Login successful and validated! ✓');
   return { session: finalSession, xsrf: finalXsrf, csrfToken: decodedXsrf(finalXsrf), useBrowser: true };
@@ -487,16 +482,22 @@ async function postAd(property, sessionData) {
   console.log(`[Mzad] ===== Posting ad for unit ${property.Unit} =====`);
   console.log(`[Mzad] Type: ${property.Type} | Category: ${categoryId} | Commercial: ${isComm}`);
 
-  // Navigate browser to add_advertise page first (sets correct Inertia version + context)
+  // Ensure browser is on add_advertise page with correct Inertia version
   if (_page) {
-    console.log('[Mzad] Navigating browser to add_advertise page...');
-    _inertiaVersion = ''; // Reset to get fresh version
-    await _page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 30000 });
-    console.log('[Mzad] On add_advertise page, URL:', _page.url());
-    if (_page.url().includes('/login')) {
-      throw new Error('Mzad: Redirected to login from add_advertise — session expired');
+    const currentUrl = _page.url();
+    if (!currentUrl.includes('/add_advertise')) {
+      console.log('[Mzad] Navigating browser to add_advertise page...');
+      _inertiaVersion = '';
+      await _page.goto(`${BASE_URL}/en/add_advertise`, { waitUntil: 'networkidle2', timeout: 30000 });
+      console.log('[Mzad] On add_advertise page, URL:', _page.url());
+      if (_page.url().includes('/login')) {
+        throw new Error('Mzad: Redirected to login from add_advertise — session expired');
+      }
+      await getInertiaVersion(_page);
+    } else {
+      console.log('[Mzad] Already on add_advertise page');
+      if (!_inertiaVersion) await getInertiaVersion(_page);
     }
-    await getInertiaVersion(_page);
   }
 
   // ── STEP 1: Language + Category ──
