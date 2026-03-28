@@ -1075,31 +1075,49 @@ app.get('/post-vacant', async (req, res) => {
 
     console.log('[post-vacant] Posting unit', unit, ':', JSON.stringify(prop));
 
-    // Pre-delete: try to free ad slots by deleting old ads
+    // Pre-delete: navigate to My Ads and use form submission to delete
     const page = mzad._getPage ? mzad._getPage() : null;
     if (page) {
       try {
-        await page.goto('https://www.mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+        // Navigate to My Ads page
+        await page.goto('https://mzadqatar.com/en/user/profile/myads', { waitUntil: 'networkidle2', timeout: 30000 });
+        // Try to delete via hidden form submission (like Laravel/Inertia does)
         const delRes = await page.evaluate(async () => {
-          try {
-            const cookies = document.cookie.split(';');
-            let xsrf = '';
-            for (const ck of cookies) { const [k,v] = ck.trim().split('='); if (k === 'XSRF-TOKEN') xsrf = decodeURIComponent(v); }
-            const knownIds = [94313102];
-            const results = [];
-            for (const id of knownIds) {
-              try {
-                const dr = await fetch('/en/delete_advertise/' + id, {
-                  method: 'POST',
-                  headers: { 'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json', 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ _method: 'DELETE' }),
-                  credentials: 'include'
-                });
-                results.push({ id, status: dr.status });
-              } catch(e) { results.push({ id, err: e.message }); }
-            }
-            return { xsrf: xsrf ? 'yes' : 'no', results };
-          } catch(e) { return { error: e.message }; }
+          const knownIds = [94313102];
+          const results = [];
+          for (const id of knownIds) {
+            try {
+              // Create a hidden form like Inertia does
+              const form = document.createElement('form');
+              form.method = 'POST';
+              form.action = '/en/delete_advertise/' + id;
+              form.style.display = 'none';
+              // Add CSRF token
+              const meta = document.querySelector('meta[name="csrf-token"]');
+              if (meta) {
+                const csrf = document.createElement('input');
+                csrf.type = 'hidden'; csrf.name = '_token'; csrf.value = meta.content;
+                form.appendChild(csrf);
+              }
+              // Add _method DELETE
+              const method = document.createElement('input');
+              method.type = 'hidden'; method.name = '_method'; method.value = 'DELETE';
+              form.appendChild(method);
+              document.body.appendChild(form);
+              // Use XMLHttpRequest instead of fetch
+              const xhr = new XMLHttpRequest();
+              xhr.open('POST', '/en/delete_advertise/' + id, true);
+              const formData = new FormData(form);
+              const xhrResult = await new Promise((resolve) => {
+                xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText.substring(0, 300) });
+                xhr.onerror = (e) => resolve({ error: 'xhr_error', msg: e.type });
+                xhr.send(formData);
+              });
+              document.body.removeChild(form);
+              results.push({ id, ...xhrResult });
+            } catch(e) { results.push({ id, err: e.message }); }
+          }
+          return results;
         });
         console.log('[post-vacant] Pre-delete result:', JSON.stringify(delRes));
       } catch(e) { console.log('[post-vacant] Pre-delete error:', e.message); }
