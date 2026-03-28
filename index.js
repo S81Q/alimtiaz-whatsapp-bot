@@ -902,6 +902,44 @@ app.get('/delete-all-ads', async (req, res) => {
   }
 });
 
+// DELETE a specific ad by ID (bypass My Ads page extraction)
+app.get('/delete-ad', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No browser page' });
+    const adId = req.query.id;
+    if (!adId) return res.status(400).json({ error: 'Missing ?id=XXXXX parameter' });
+
+    const cookies = await page.cookies();
+    let xsrf = '';
+    for (const c of cookies) { if (c.name === 'XSRF-TOKEN') xsrf = decodeURIComponent(c.value); }
+
+    const delResult = await page.evaluate(async (adId, csrfToken) => {
+      try {
+        const res = await fetch('https://www.mzadqatar.com/en/delete_advertise/' + adId, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-XSRF-TOKEN': csrfToken,
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ _method: 'DELETE' }),
+          credentials: 'include',
+        });
+        const text = await res.text();
+        return { status: res.status, body: text.substring(0, 500) };
+      } catch(e) { return { error: e.message }; }
+    }, adId, xsrf);
+
+    console.log('[delete-ad] Delete ad', adId, ':', JSON.stringify(delResult));
+    res.json({ status: 'done', adId, result: delResult });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST a specific vacant unit from the properties sheet
 app.get('/post-vacant', async (req, res) => {
   try {
