@@ -940,118 +940,36 @@ async function postAd(property, sessionData) {
     throw new Error('Mzad validation errors: ' + JSON.stringify(errors));
   }
 
-  // Check if step 3 actually created the ad or just returned the form at step 3
-  // The real Inertia form auto-resubmits when server returns step=3 with prevData
+  // Check step 3 result
   const s3gAAD = s3data?.getAddAdvertiseData;
   const s3url = s3data?.url;
-  if (s3gAAD && s3gAAD.step === '3' && s3url === '/en/add_advertise' && _page) {
-    console.log('[Mzad] Step 3 returned form at step=3 (ad not created yet). Resubmitting with isResetImages=1...');
-    console.log('[Mzad] apiData:', JSON.stringify(s3gAAD.apiData));
-
-    // Extract prevData from server response for resubmission
-    const resubPrevData = s3gAAD.prevData || {};
-    const resubS1 = resubPrevData.step1Data || serverStep1Data || { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' };
-    const resubS2 = resubPrevData.step2Data || serverStep2Data || step2Data;
-
-    const csrf2 = decodedXsrf(xsrf);
-    const ver2 = _inertiaVersion || '';
-    const step3Res2 = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer, s1Data, s2Data, curId) => {
-      const byteChars = atob(imgB64);
-      const byteArr = new Uint8Array(byteChars.length);
-      for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
-      const blob = new Blob([byteArr], { type: 'image/jpeg' });
-
-      function appendFormData(fd, key, value) {
-        if (value === null || value === undefined) {
-          fd.append(key, '');
-        } else if (value instanceof Blob || value instanceof File) {
-          fd.append(key, value, value.name || 'property.jpg');
-        } else if (typeof value === 'object' && !Array.isArray(value)) {
-          for (const [k, v] of Object.entries(value)) {
-            appendFormData(fd, key + '[' + k + ']', v);
-          }
-        } else if (Array.isArray(value)) {
-          if (value.length === 0) {
-            fd.append(key, '');
-          } else {
-            for (let i = 0; i < value.length; i++) {
-              appendFormData(fd, key + '[' + i + ']', value[i]);
-            }
-          }
-        } else {
-          fd.append(key, String(value));
-        }
-      }
-
-      const fd = new FormData();
-      fd.append('step', '3');
-      appendFormData(fd, 'step1Data', s1Data || {});
-      appendFormData(fd, 'step2Data', s2Data || {});
-      const step3Obj = {
-        productPrice: String(p),
-        productNameEnglish: tEn,
-        productDescriptionEnglish: dEn,
-        productNameArabic: tAr,
-        productDescriptionArabic: dAr,
-        productNameArEn: '',
-        productDescriptionArEn: '',
-        autoRenew: '0',
-        agree_commission: '1',
-        currencyId: String(curId || 1),
-        isResetImages: '1',
-        productId: '',
-        images: [
-          { id: '0', type: 'image/jpeg', url: '', tempFile: blob }
-        ],
-      };
-      appendFormData(fd, 'step3Data', step3Obj);
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Accept': 'text/html, application/xhtml+xml',
-          'X-Requested-With': 'XMLHttpRequest',
-          'X-Inertia': 'true',
-          'X-Inertia-Version': inertiaVer,
-          'X-XSRF-TOKEN': csrfToken,
-        },
-        body: fd,
-        credentials: 'include',
-      });
-      const text = await res.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch {}
-      let apiDataSafe = null;
-      if (json?.props?.getAddAdvertiseData?.apiData) {
-        const ad = json.props.getAddAdvertiseData.apiData;
-        apiDataSafe = { keys: Object.keys(ad), didNotSaved: ad.didNotSaved, status: ad.status, errorType: ad.errorType, message: ad.message };
-      }
-      return { status: res.status, url: json?.url, component: json?.component, errors: json?.props?.errors, redirectBackData: json?.props?.redirectBackData, gAAD_step: json?.props?.getAddAdvertiseData?.prevData?.step, apiData: apiDataSafe, fullLen: text.length, isJson: !!json };
-    }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf2, ver2, resubS1, resubS2, currencyId);
-
-    console.log('[Mzad] Step 3 RESUBMIT response:', JSON.stringify(step3Res2));
-
-    // Check if resubmit succeeded (URL changed = redirect to created ad)
-    if (step3Res2.url && step3Res2.url !== '/en/add_advertise') {
-      console.log(`[Mzad] ===== Ad created! Redirect to: ${step3Res2.url} =====`);
-      return {
-        success: true, unit: property.Unit, method: 'resubmit',
-        step1: { status: step1Res.status }, step2: { status: step2Res.status },
-        step3: { status: step3Res.status }, step3_resubmit: step3Res2,
-      };
-    }
-
-    // Even if URL didn't change, log and return what we have
-    console.warn('[Mzad] Resubmit also returned step 3 form. apiData:', JSON.stringify(step3Res2.apiData));
+  
+  // If apiData has didNotSaved, the ad was NOT created
+  if (s3ApiData?.didNotSaved) {
+    console.error("[Mzad] Step 3 failed: didNotSaved =", s3ApiData.didNotSaved, "message:", s3ApiData.message);
     return {
-      success: false, unit: property.Unit, method: 'resubmit_failed',
+      success: false, unit: property.Unit, method: "step3_didNotSaved",
       step1: { status: step1Res.status }, step2: { status: step2Res.status },
-      step3: { status: step3Res.status, data: JSON.stringify(s3data).substring(0, 1000) },
-      step3_resubmit: step3Res2,
+      step3: { status: step3Res.status, url: s3url, apiData: s3ApiData, step: s3gAAD?.step },
       groupsData: groupsData,
       pageGroupsData: pageGroupsData,
     };
   }
+  
+  // If step 3 returned 200 with no didNotSaved and no errors,
+  // the ad was likely created. Do NOT resubmit (resubmit causes subscription error).
+  if (step3Res.status === 200 && (!errors || Object.keys(errors).length === 0)) {
+    console.log("[Mzad] Step 3 returned 200 with no errors and no didNotSaved. Ad likely created!");
+    console.log("[Mzad] Step 3 url:", s3url, "step:", s3gAAD?.step);
+    return {
+      success: true, unit: property.Unit, method: "step3_no_error",
+      step1: { status: step1Res.status }, step2: { status: step2Res.status },
+      step3: { status: step3Res.status, url: s3url, apiData: s3ApiData || null, step: s3gAAD?.step },
+      groupsData: groupsData,
+      pageGroupsData: pageGroupsData,
+    };
+  }
+
 
   // If step 3 JSON approach fails, try alternative with JSON body including base64 image
   if (step3Res.status >= 400) {
