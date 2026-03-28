@@ -27,54 +27,26 @@ function buildTitleEn(property) {
 
 function buildDescription(property) {
   const typeAr = TYPE_AR[property.Type] || property.Type;
+  const price = property.Rent_QAR ? property.Rent_QAR + ' QAR/month' : 'Please enquire';
+  const size = property.Size_sqm ? property.Size_sqm + ' sqm' : '';
+  const beds = property.Bedrooms ? property.Bedrooms + ' BR' : '';
+  const baths = property.Bathrooms ? property.Bathrooms + ' BA' : '';
+  const location = property.Location || 'Doha, Qatar';
+  const mapLink = property.Maps_Link ? '\n' + property.Maps_Link : '';
 
-  const price = property.Rent_QAR
-    ? `${property.Rent_QAR} ريال/شهر | QAR ${property.Rent_QAR}/month`
-    : 'يرجى الاستفسار | Please enquire';
+  const details = [size, beds, baths].filter(Boolean).join(' | ');
 
-  const size = property.Size_sqm
-    ? `${property.Size_sqm} م² | ${property.Size_sqm} sqm`
-    : 'يرجى الاستفسار | Please enquire';
+  return `${typeAr} for rent | ${property.Type} For Rent
+${location}
+${price}${details ? '\n' + details : ''}
+---
+Contact us:
+Mohammed: 31293905
+Nizar: 77851855
+Ahmed: 55513389
 
-  const beds = property.Bedrooms || 'يرجى الاستفسار | Please enquire';
-  const baths = property.Bathrooms || 'يرجى الاستفسار | Please enquire';
-  const floor = property.Floor || 'يرجى الاستفسار | Please enquire';
-  const location = property.Location || 'الدوحة، قطر | Doha, Qatar';
-  const notes = property.Notes ? `\n• المنطقة | Zone: ${property.Notes}` : '';
-  const mapLink = property.Maps_Link ? `\n📍 الموقع | Location: ${property.Maps_Link}` : '';
-
-  return `🏢 ${typeAr} للإيجار | ${property.Type} For Rent
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📋 تفاصيل العقار | Property Details:
-- النوع | Type: ${typeAr} | ${property.Type}
-- الموقع | Location: ${location}${notes}
-- الإيجار | Rent: ${price}
-- المساحة | Size: ${size}
-- الطابق | Floor: ${floor}
-- غرف النوم | Bedrooms: ${beds}
-- دورات المياه | Bathrooms: ${baths}${mapLink}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-تمام! بإمكانك التواصل مع أحد ممثلينا مباشرة:
-You may contact us on the below number
-
-للتنسيق والاستفسار يرجى التواصل مع أحد ممثلينا:
-👤 محمد زيدان: 31293905 Mohammed
-👤 نزار: 77851855 Nizar
-👤 أحمد: 55513389 Ahmed
-
-بإمكانهم ترتيب مواعيد المعاينة والإجابة على جميع استفساراتك حول العقارات المتاحة.
-Available 24/7
-
-للاستفسار الفوري عن العقارات، تحدث مع مساعدنا الذكي على واتساب
-For instant property inquiries, chat with our AI assistant on WhatsApp
-+974 7029 7066
-أرسل لنا رسالة في أي وقت — نرد بالعربية والإنجليزية فوراً ✓
-Send us a message anytime — we reply in Arabic & English instantly ✓
-
-🏢 الامتياز والجودة لإدارة العقارات
-Al-Imtiaz Wal-Jawada Property Management`;
+WhatsApp: +974 7029 7066
+Al-Imtiaz Property Management${mapLink}`;
 }
 
 module.exports = { buildTitleAr, buildTitleEn, buildDescription };
