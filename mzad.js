@@ -623,6 +623,43 @@ async function postAd(property, sessionData) {
     serverStep1Data = s1props?.props?.getAddAdvertiseData?.prevData?.step1Data || null;
     console.log('[Mzad] Server step1Data prevData:', JSON.stringify(serverStep1Data));
   } catch (e) { console.warn('[Mzad] Could not extract step1 prevData:', e.message); }
+
+  // Extract groups from step 1 response (this is the Inertia response with full apiData)
+  try {
+    const s1full = typeof step1Res.data === "string" ? JSON.parse(step1Res.data) : step1Res.data;
+    const apiData = s1full?.props?.getAddAdvertiseData?.apiData;
+    if (apiData?.groups) {
+      const allProds = apiData.groups.flatMap(g => g.products || []);
+      groupsData = {
+        source: "step1_response",
+        totalGroups: apiData.groups.length,
+        totalProducts: allProds.length,
+        groups: apiData.groups.map(g => ({
+          groupName: g.groupName,
+          clicktype: g.clicktype,
+          productCount: (g.products || []).length,
+          products: (g.products || []).map(p => ({
+            productId: p.productId,
+            productName: p.productName,
+            isAllowToAdd: p.isAllowToAdd,
+            packageTag: p.packageTag || null,
+            adsCount: p.adsCount,
+            adsLimit: p.adsLimit,
+          }))
+        })),
+        cat8494: allProds.find(p => String(p.productId) === "8494") || "NOT FOUND",
+      };
+      console.log("[Mzad] Groups from step1:", JSON.stringify(groupsData).substring(0, 3000));
+    } else {
+      console.log("[Mzad] No groups in step1 response. apiData keys:", apiData ? Object.keys(apiData) : "null");
+      // Try to log what IS in getAddAdvertiseData
+      const gAAD = s1full?.props?.getAddAdvertiseData;
+      if (gAAD) {
+        groupsData = { source: "step1_no_groups", gAADKeys: Object.keys(gAAD), apiDataKeys: apiData ? Object.keys(apiData) : null, step: gAAD.step || gAAD.prevData?.step };
+      }
+    }
+  } catch(e) { console.warn("[Mzad] Groups extraction from step1 failed:", e.message); }
+
   // ── STEP 2: Property details ──
   console.log('[Mzad] Step 2: Submitting property details...');
 

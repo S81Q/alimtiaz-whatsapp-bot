@@ -671,6 +671,10 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
 });
 
+app.get('/version', (req, res) => {
+  res.json({ commit: '73779da-v2', deployed: new Date().toISOString(), build: 'groups-extract-with-errors' });
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', version: 'v3-ad-poster' });
 });
