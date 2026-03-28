@@ -16,13 +16,32 @@ const TYPE_AR = {
   'Commercial': 'عقار تجاري',
 };
 
+// Short English type for titles (max 33 chars total)
+const TYPE_SHORT_EN = {
+  'Villa': 'Villa',
+  'Apartment': 'Apt',
+  'Warehouse': 'Store',
+  'Shop': 'Shop',
+  'Labor Camp': 'Camp',
+  'Factory': 'Factory',
+  'Building': 'Bldg',
+  'Room': 'Room',
+  'Grocery': 'Grocery',
+  'Commercial': 'Commercial',
+};
+
 function buildTitleAr(property) {
   const type = TYPE_AR[property.Type] || property.Type;
-  return `${type} للإيجار - ${property.Location || 'الدوحة'} - قطر`;
+  // Mzad limit: 33 chars for Arabic title
+  const title = type + ' للإيجار ' + (property.Unit || '');
+  return title.substring(0, 33);
 }
 
 function buildTitleEn(property) {
-  return `${property.Type} For Rent - ${property.Location || 'Doha'} - Qatar`;
+  const type = TYPE_SHORT_EN[property.Type] || property.Type;
+  // Mzad limit: 33 chars for English title
+  const title = type + ' For Rent ' + (property.Unit || '');
+  return title.substring(0, 33);
 }
 
 function buildDescription(property) {
