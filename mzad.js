@@ -566,6 +566,40 @@ async function postAd(property, sessionData) {
     serverStep1Data = s1props?.props?.getAddAdvertiseData?.prevData?.step1Data || null;
     console.log('[Mzad] Server step1Data prevData:', JSON.stringify(serverStep1Data));
   } catch (e) { console.warn('[Mzad] Could not extract step1 prevData:', e.message); }
+
+  // Extract apiData.groups from step 1 to understand category/subscription requirements
+  let groupsData = null;
+  try {
+    const s1p = typeof step1Res.data === 'string' ? JSON.parse(step1Res.data) : step1Res.data;
+    const apiData = s1p?.props?.getAddAdvertiseData?.apiData;
+    if (apiData?.groups) {
+      groupsData = apiData.groups.map(g => ({
+        groupName: g.groupName,
+        clicktype: g.clicktype,
+        products: (g.products || []).map(p => ({
+          productId: p.productId,
+          productName: p.productName,
+          isAllowToAdd: p.isAllowToAdd,
+          packageTag: p.packageTag || null,
+          adsCount: p.adsCount,
+          adsLimit: p.adsLimit,
+        }))
+      }));
+      console.log('[Mzad] Groups data:', JSON.stringify(groupsData));
+      // Find our target category 8494
+      const target = apiData.groups.flatMap(g => g.products || []).find(p => p.productId == 8494 || p.productId == '8494');
+      if (target) {
+        console.log('[Mzad] Category 8494 details:', JSON.stringify(target));
+      } else {
+        console.log('[Mzad] Category 8494 NOT FOUND in groups!');
+        // Log all product IDs for reference
+        const allIds = apiData.groups.flatMap(g => (g.products || []).map(p => p.productId));
+        console.log('[Mzad] Available product IDs:', JSON.stringify(allIds));
+      }
+    } else {
+      console.log('[Mzad] No groups in step 1 apiData. apiData keys:', apiData ? Object.keys(apiData) : 'null');
+    }
+  } catch(e) { console.warn('[Mzad] Could not extract groups:', e.message); }
   // ── STEP 2: Property details ──
   console.log('[Mzad] Step 2: Submitting property details...');
 
@@ -953,6 +987,7 @@ async function postAd(property, sessionData) {
       step1: { status: step1Res.status }, step2: { status: step2Res.status },
       step3: { status: step3Res.status, data: JSON.stringify(s3data).substring(0, 1000) },
       step3_resubmit: step3Res2,
+      groupsData: groupsData,
     };
   }
 
@@ -990,6 +1025,7 @@ async function postAd(property, sessionData) {
     step1: { status: step1Res.status },
     step2: { status: step2Res.status },
     step3: { status: step3Res.status, url: s3data?.url, apiData: s3ApiData || null, step: s3data?.getAddAdvertiseData?.step },
+    groupsData: groupsData,
   };
 }
 
