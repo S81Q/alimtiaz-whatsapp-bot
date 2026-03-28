@@ -630,7 +630,7 @@ async function postAd(property, sessionData) {
     const apiData = s1full?.props?.getAddAdvertiseData?.apiData;
     if (apiData?.groups) {
       const allProds = apiData.groups.flatMap(g => g.products || []);
-      groupsData = {
+      if (!groupsData || groupsData.extractError) groupsData = {
         source: "step1_response",
         totalGroups: apiData.groups.length,
         totalProducts: allProds.length,
@@ -655,7 +655,7 @@ async function postAd(property, sessionData) {
       // Try to log what IS in getAddAdvertiseData
       const gAAD = s1full?.props?.getAddAdvertiseData;
       if (gAAD) {
-        groupsData = { source: "step1_no_groups", gAADKeys: Object.keys(gAAD), apiDataKeys: apiData ? Object.keys(apiData) : null, step: gAAD.step || gAAD.prevData?.step };
+        if (!groupsData || groupsData.extractError) groupsData = { source: "step1_no_groups", gAADKeys: Object.keys(gAAD), apiDataKeys: apiData ? Object.keys(apiData) : null, step: gAAD.step || gAAD.prevData?.step };
       }
     }
   } catch(e) { console.warn("[Mzad] Groups extraction from step1 failed:", e.message); }
