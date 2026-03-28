@@ -786,7 +786,7 @@ app.get('/mzad-verify-otp', async (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'manual-otp-login-endpoints' });
+  res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'fix-step2data-from-step1-prevdata' });
 });
 
 app.get('/health', (req, res) => {

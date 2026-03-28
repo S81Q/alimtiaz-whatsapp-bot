@@ -624,6 +624,9 @@ async function postAd(property, sessionData) {
     serverStep1Data = s1props?.props?.getAddAdvertiseData?.prevData?.step1Data || null;
     serverStep = s1props?.props?.getAddAdvertiseData?.prevData?.step;
     console.log('[Mzad] Server prevData.step after step 1:', serverStep);
+    // Also extract step2Data from Step 1 prevData (server pre-fills when Step 2 is skipped)
+    const s1PrevStep2Data = s1props?.props?.getAddAdvertiseData?.prevData?.step2Data || null;
+    console.log('[Mzad] Server step2Data from step1:', s1PrevStep2Data ? JSON.stringify(s1PrevStep2Data).substring(0, 300) : 'null');
     console.log('[Mzad] Server step1Data prevData:', JSON.stringify(serverStep1Data));
   } catch (e) { console.warn('[Mzad] Could not extract step1 prevData:', e.message); }
 
@@ -669,6 +672,11 @@ async function postAd(property, sessionData) {
   const shouldSkipStep2 = (typeof serverStep !== "undefined" && serverStep !== null && parseInt(serverStep) >= 2);
   if (shouldSkipStep2) {
     console.log("[Mzad] SKIPPING Step 2: server prevData.step =", serverStep, "(already past step 2)");
+    // Use step2Data from Step 1 response (server pre-filled it)
+    if (typeof s1PrevStep2Data !== 'undefined' && s1PrevStep2Data) {
+      serverStep2Data = s1PrevStep2Data;
+      console.log("[Mzad] Using step2Data from Step 1 prevData:", JSON.stringify(serverStep2Data).substring(0, 300));
+    }
   } else {
   // ── STEP 2: Property details ──
   console.log('[Mzad] Step 2: Submitting property details...');
