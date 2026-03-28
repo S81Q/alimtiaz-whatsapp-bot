@@ -1090,8 +1090,9 @@ app.get('/post-vacant', async (req, res) => {
             for (const id of knownIds) {
               try {
                 const dr = await fetch('/en/delete_advertise/' + id, {
-                  method: 'DELETE',
-                  headers: { 'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+                  method: 'POST',
+                  headers: { 'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ _method: 'DELETE' }),
                   credentials: 'include'
                 });
                 results.push({ id, status: dr.status });
