@@ -534,6 +534,41 @@ async function postAd(property, sessionData) {
     }
   }
 
+  // Extract groups/categories from the add_advertise page (for diagnosis)
+  let groupsData = null;
+  if (_page) {
+    try {
+      groupsData = await _page.evaluate(() => {
+        const el = document.querySelector('[data-page]');
+        if (!el) return { error: 'no data-page' };
+        const pd = JSON.parse(el.getAttribute('data-page'));
+        const gAAD = pd?.props?.getAddAdvertiseData;
+        if (!gAAD?.apiData?.groups) return { error: 'no groups', gAADKeys: Object.keys(gAAD || {}), apiDataKeys: gAAD?.apiData ? Object.keys(gAAD.apiData) : null };
+        const allProds = gAAD.apiData.groups.flatMap(g => g.products || []);
+        return {
+          totalGroups: gAAD.apiData.groups.length,
+          totalProducts: allProds.length,
+          groups: gAAD.apiData.groups.map(g => ({
+            groupName: g.groupName,
+            clicktype: g.clicktype,
+            products: (g.products || []).map(p => ({
+              productId: p.productId,
+              productName: p.productName,
+              isAllowToAdd: p.isAllowToAdd,
+              packageTag: p.packageTag || null,
+              adsCount: p.adsCount,
+              adsLimit: p.adsLimit,
+            }))
+          })),
+          cat8494: allProds.find(p => String(p.productId) === '8494') || 'NOT FOUND',
+          isLoggedIn: pd.props?.isLoggedIn,
+          component: pd.component,
+        };
+      });
+      console.log('[Mzad] Groups extraction:', JSON.stringify(groupsData).substring(0, 3000));
+    } catch(e) { console.warn('[Mzad] Groups extraction failed:', e.message); }
+  }
+
   // ── STEP 1: Language + Category ──
   console.log('[Mzad] Step 1: Submitting language + category...');
   const step1Res = await inertiaPost(`${BASE_URL}/en/add_advertise`, {
