@@ -606,7 +606,7 @@ app.get('/test-other-cat', async (req, res) => {
     };
     
     // Override category to "Others" (productId=9)
-    testProp._overrideCategory = 8; // Furniture (known to exist)
+    testProp._overrideCategory = 9; // Others (free category)
     
     const result = await mzad.postAd(testProp, session);
     res.json({ status: 'done', result });
