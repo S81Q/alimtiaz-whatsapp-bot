@@ -840,22 +840,7 @@ async function postAd(property, sessionData) {
       };
       appendFormData(fd, 'step3Data', step3Obj);
       /* OLD MANUAL APPENDS BELOW - SKIP
-      fd.append('step3Data[productPrice]', String(p));
-      fd.append('step3Data[productNameEnglish]', tEn);
-      fd.append('step3Data[productDescriptionEnglish]', dEn);
-      fd.append('step3Data[productNameArabic]', tAr);
-      fd.append('step3Data[productDescriptionArabic]', dAr);
-      fd.append('step3Data[autoRenew]', '0');
-      fd.append('step3Data[agree_commission]', '1');
-      fd.append('step3Data[currencyId]', String(curId || 1));
-      fd.append('step3Data[isResetImages]', '0');
-      fd.append('step3Data[productId]', '');
-      // Inertia objectToFormData sends images as nested objects:
-      // step3Data[images][0][id], [type], [url], [tempFile]
-      fd.append('step3Data[images][0][id]', '0');
-      fd.append('step3Data[images][0][type]', 'image/jpeg');
-      fd.append('step3Data[images][0][url]', '');
-      fd.append('step3Data[images][0][tempFile]', blob, 'property.jpg');
+      // Double-append removed - appendFormData already handles step3Obj
       END OLD MANUAL APPENDS */
 
       const res = await fetch(url, {
@@ -1088,6 +1073,60 @@ async function getGroupsData() {
   }
 }
 
-module.exports = { getSession, postAd, closeBrowser, getGroupsData };
+
+async function getAccountStatus() {
+  if (!_page) return { error: "No browser. Login first via /debug-mzad-steps?fresh=1" };
+  try {
+    // Navigate to user profile to see subscription/package status
+    await _page.goto("https://www.mzadqatar.com/en/user/profile", { waitUntil: "networkidle2", timeout: 30000 });
+    const profileData = await _page.evaluate(() => {
+      try {
+        const el = document.querySelector("[data-page]");
+        if (!el) return { error: "no data-page element" };
+        const raw = el.getAttribute("data-page");
+        const pd = JSON.parse(raw);
+        return {
+          component: pd.component,
+          url: pd.url,
+          propsKeys: pd.props ? Object.keys(pd.props) : [],
+          userData: pd.props?.userData || null,
+          classifiedUserData: pd.props?.classifiedUserData || null,
+          packageInfo: pd.props?.packageInfo || pd.props?.getUserPackageInfo || null,
+          subscription: pd.props?.subscription || null,
+          allPropsPreview: JSON.stringify(pd.props).substring(0, 3000)
+        };
+      } catch(e) { return { error: e.message }; }
+    });
+    
+    // Also try the purchase/ad-limit page
+    await _page.goto("https://www.mzadqatar.com/en/user/profile/purchase/ad-limit", { waitUntil: "networkidle2", timeout: 30000 });
+    const adLimitData = await _page.evaluate(() => {
+      try {
+        const el = document.querySelector("[data-page]");
+        if (!el) return { error: "no data-page element" };
+        const raw = el.getAttribute("data-page");
+        const pd = JSON.parse(raw);
+        return {
+          component: pd.component,
+          url: pd.url,
+          propsKeys: pd.props ? Object.keys(pd.props) : [],
+          packages: pd.props?.packages || null,
+          userPackages: pd.props?.userPackages || null,
+          adLimit: pd.props?.adLimit || null,
+          allPropsPreview: JSON.stringify(pd.props).substring(0, 3000)
+        };
+      } catch(e) { return { error: e.message }; }
+    });
+    
+    // Navigate back to add_advertise for future operations
+    await _page.goto("https://www.mzadqatar.com/en/add_advertise", { waitUntil: "networkidle2", timeout: 30000 });
+    
+    return { profileData, adLimitData };
+  } catch(e) {
+    return { error: e.message };
+  }
+}
+
+module.exports = { getSession, postAd, closeBrowser, getGroupsData, getAccountStatus };
 module.exports = { getSession, postAd, closeBrowser, getGroupsData };
  

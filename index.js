@@ -728,8 +728,39 @@ app.get('/page-data', async (req, res) => {
   }
 });
 
+
+app.get('/check-subscription', async (req, res) => {
+  try {
+    const pageData = await mzad.getGroupsData();
+    if (pageData.error) return res.status(500).json({ error: pageData.error });
+    
+    // Also try to navigate to ad-limit page for subscription info
+    res.json({
+      status: 'done',
+      classifiedUserData: pageData.classifiedUserData || null,
+      adsSelectedData: pageData.adsSelectedData || null,
+      prevData: pageData.prevData || null,
+      groups: pageData.groups || null,
+      redirectBackData: pageData.redirectBackData || null,
+      fullKeys: pageData ? Object.keys(pageData) : []
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+app.get('/account-status', async (req, res) => {
+  try {
+    const data = await mzad.getAccountStatus();
+    res.json(data);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/version', (req, res) => {
-  res.json({ commit: '73779da-v2', deployed: new Date().toISOString(), build: 'groups-extract-with-errors' });
+  res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'fix-double-append-add-account-status' });
 });
 
 app.get('/health', (req, res) => {
