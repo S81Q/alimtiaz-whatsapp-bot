@@ -102,7 +102,9 @@ async function readOtpFromGmail(platform, maxRetries = 3, retryDelay = 10000, mi
         }
         const body = extractEmailBody(msgRes.data);
         // Look for 4-6 digit OTP code
-        const otpMatch = body.match(/\b(\d{4,6})\b/);
+        // Try Mzad-specific pattern first: "code is: 123456" or "code is : 123456"
+        const mzadMatch = body.match(/code\s*(?:is)?\s*:?\s*(\d{4,6})/i);
+        const otpMatch = mzadMatch || body.match(/\b(\d{6})\b/);
         if (otpMatch) {
           console.log(`[Gmail OTP] Found OTP for ${platform}: ${otpMatch[1]}`);
           return otpMatch[1];
