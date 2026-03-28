@@ -1029,5 +1029,68 @@ async function postAd(property, sessionData) {
   };
 }
 
-module.exports = { getSession, postAd, closeBrowser };
+
+// Diagnostic: Extract groups/categories data from add_advertise page
+async function getGroupsData(sessionObj) {
+  if (!_page) throw new Error('No browser page. Call getSession first.');
+  
+  console.log('[Mzad] Navigating to add_advertise page to extract groups...');
+  await _page.goto('https://www.mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+  
+  const data = await _page.evaluate(() => {
+    try {
+      const el = document.querySelector('[data-page]');
+      if (!el) return { error: 'No data-page element' };
+      const pageData = JSON.parse(el.getAttribute('data-page'));
+      const gAAD = pageData?.props?.getAddAdvertiseData;
+      if (!gAAD) return { error: 'No getAddAdvertiseData', propsKeys: Object.keys(pageData?.props || {}) };
+      
+      const apiData = gAAD.apiData;
+      if (!apiData) return { error: 'No apiData', gAADKeys: Object.keys(gAAD) };
+      
+      // Extract groups with products
+      const groups = (apiData.groups || []).map(g => ({
+        groupName: g.groupName,
+        clicktype: g.clicktype,
+        products: (g.products || []).map(p => ({
+          productId: p.productId,
+          productName: p.productName,
+          isAllowToAdd: p.isAllowToAdd,
+          packageTag: p.packageTag || null,
+          adsCount: p.adsCount,
+          adsLimit: p.adsLimit,
+          remainingAds: p.remainingAds,
+        }))
+      }));
+      
+      // Find category 8494
+      const allProducts = apiData.groups.flatMap(g => g.products || []);
+      const cat8494 = allProducts.find(p => String(p.productId) === '8494');
+      
+      return {
+        totalGroups: groups.length,
+        totalProducts: allProducts.length,
+        groups: groups,
+        cat8494: cat8494 || 'NOT FOUND',
+        apiDataKeys: Object.keys(apiData),
+        isLoggedIn: pageData?.props?.isLoggedIn,
+        classifiedUserData: pageData?.props?.classifiedUserData ? {
+          keys: Object.keys(pageData.props.classifiedUserData),
+          userId: pageData.props.classifiedUserData.userId,
+          userName: pageData.props.classifiedUserData.userName,
+          phone: pageData.props.classifiedUserData.mobileNumber,
+        } : null,
+        adsSelectedData: gAAD.adsSelectedData,
+        prevData: gAAD.prevData,
+        step: gAAD.step,
+      };
+    } catch(e) {
+      return { error: e.message };
+    }
+  });
+  
+  return data;
+}
+
+module.exports = { getSession, postAd, closeBrowser, getGroupsData };
  

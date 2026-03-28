@@ -574,6 +574,23 @@ app.get('/debug-mzad-steps', async (req, res) => {
   }
 });
 
+// Diagnostic: Get category groups and subscription info
+app.get('/debug-groups', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    console.log('[debug-groups] Getting session...');
+    const session = await mzad.getSession();
+    if (!session) return res.status(500).json({ error: 'No session' });
+    
+    console.log('[debug-groups] Extracting groups data...');
+    const groups = await mzad.getGroupsData(session);
+    res.json({ status: 'done', groups });
+  } catch (e) {
+    console.error('[debug-groups] Error:', e.message);
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
 // Check if ad was posted by viewing user's ads via bot session
 app.get('/check-my-ads', async (req, res) => {
   try {
