@@ -1145,6 +1145,34 @@ app.get('/nuke-ad', async (req, res) => {
   }
 });
 
+
+// Extract full product data to find internal ID
+app.get('/get-ad-info', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No browser page' });
+    const slug = req.query.slug || 'i-need-one-94313102';
+    await page.goto('https://mzadqatar.com/en/products/' + slug, { waitUntil: 'networkidle2', timeout: 30000 });
+    const data = await page.evaluate(() => {
+      const el = document.querySelector('[data-page]');
+      if (!el) return { error: 'no data-page' };
+      const pd = JSON.parse(el.getAttribute('data-page'));
+      const ads = pd.props?.ads;
+      const adsJSON = JSON.stringify(ads).substring(0, 3000);
+      // Find all IDs in the page
+      const allIDs = {};
+      for (const [key, val] of Object.entries(pd.props || {})) {
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          if (val.id || val.productId) allIDs[key] = { id: val.id, productId: val.productId };
+        }
+      }
+      return { component: pd.component, adsType: typeof ads, adsIsArray: Array.isArray(ads), adsJSON, allIDs };
+    });
+    res.json(data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST a specific vacant unit from the properties sheet
 app.get('/post-vacant', async (req, res) => {
   try {
