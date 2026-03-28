@@ -1049,6 +1049,102 @@ app.get('/delete-ad-ui', async (req, res) => {
   }
 });
 
+
+// Ultimate delete: navigate to ad page (where fetch proven working), try every delete approach
+app.get('/nuke-ad', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No browser page' });
+    const slug = req.query.slug || 'i-need-one-94313102';
+    const adId = req.query.id || '94313102';
+
+    // Navigate to the ad page (diagnostic proved fetch works here)
+    await page.goto('https://mzadqatar.com/en/products/' + slug, { waitUntil: 'networkidle2', timeout: 30000 });
+    const currentUrl = page.url();
+
+    const result = await page.evaluate(async (adId) => {
+      const results = [];
+      // Get cookies
+      const cookies = document.cookie.split(';');
+      let xsrf = '';
+      for (const ck of cookies) { const [k,v] = ck.trim().split('='); if (k === 'XSRF-TOKEN') xsrf = decodeURIComponent(v); }
+      let csrfMeta = '';
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      if (meta) csrfMeta = meta.content;
+
+      // Test 1: simple GET to the delete URL
+      try {
+        const r = await fetch('/en/delete_advertise/' + adId, { credentials: 'include' });
+        results.push({ test: 'GET', status: r.status, body: (await r.text()).substring(0,200) });
+      } catch(e) { results.push({ test: 'GET', err: e.message }); }
+
+      // Test 2: POST with form data and _token
+      try {
+        const fd = new FormData();
+        fd.append('_method', 'DELETE');
+        if (csrfMeta) fd.append('_token', csrfMeta);
+        const r = await fetch('/en/delete_advertise/' + adId, { method: 'POST', body: fd, credentials: 'include' });
+        results.push({ test: 'POST-FormData', status: r.status, body: (await r.text()).substring(0,200) });
+      } catch(e) { results.push({ test: 'POST-FormData', err: e.message }); }
+
+      // Test 3: POST JSON with XSRF
+      try {
+        const r = await fetch('/en/delete_advertise/' + adId, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({ _method: 'DELETE' }),
+          credentials: 'include'
+        });
+        results.push({ test: 'POST-JSON-XSRF', status: r.status, body: (await r.text()).substring(0,200) });
+      } catch(e) { results.push({ test: 'POST-JSON-XSRF', err: e.message }); }
+
+      // Test 4: Inertia-style POST
+      try {
+        const r = await fetch('/en/delete_advertise/' + adId, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-XSRF-TOKEN': xsrf,
+            'X-Inertia': 'true',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'text/html, application/xhtml+xml'
+          },
+          body: JSON.stringify({ _method: 'DELETE' }),
+          credentials: 'include'
+        });
+        results.push({ test: 'POST-Inertia', status: r.status, body: (await r.text()).substring(0,200) });
+      } catch(e) { results.push({ test: 'POST-Inertia', err: e.message }); }
+
+      // Test 5: XHR approach
+      try {
+        const xhrRes = await new Promise((resolve) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '/en/delete_advertise/' + adId, true);
+          xhr.setRequestHeader('X-XSRF-TOKEN', xsrf);
+          xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+          xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText.substring(0,200) });
+          xhr.onerror = () => resolve({ err: 'xhr_network_error' });
+          const fd = new FormData();
+          fd.append('_method', 'DELETE');
+          if (csrfMeta) fd.append('_token', csrfMeta);
+          xhr.send(fd);
+        });
+        results.push({ test: 'XHR-FormData', ...xhrRes });
+      } catch(e) { results.push({ test: 'XHR-FormData', err: e.message }); }
+
+      return { xsrf: xsrf ? xsrf.substring(0,20) + '...' : 'MISSING', csrfMeta: csrfMeta ? 'present' : 'MISSING', results };
+    }, adId);
+
+    // Navigate back to add_advertise
+    await page.goto('https://mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+
+    res.json({ currentUrl, result });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST a specific vacant unit from the properties sheet
 app.get('/post-vacant', async (req, res) => {
   try {
