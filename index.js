@@ -399,6 +399,8 @@ app.post('/run-posting', async (req, res) => {
 app.post('/test-posting', async (req, res) => {
   try {
     const result = await triggerManually({ testOnly: true });
+
+    // After postAd, extract page data while browser is still alive
     res.json({ status: 'done', result });
   } catch (e) {
     logError(e);
@@ -567,7 +569,14 @@ app.get('/debug-mzad-steps', async (req, res) => {
 
     console.log('[debug-mzad] Running Puppeteer postAd...');
     const result = await mzad.postAd(testProperty, session);
-    res.json({ status: 'done', result });
+
+    // After postAd, extract page data while browser is still alive
+    let pageData = null;
+    try {
+      pageData = await mzad.getGroupsData();
+    } catch(e) { pageData = { error: e.message }; }
+
+    res.json({ status: 'done', result, pageData });
   } catch (e) {
     console.error('[debug-mzad] Error:', e.message);
     res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
