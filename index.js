@@ -905,42 +905,83 @@ app.get('/delete-all-ads', async (req, res) => {
   }
 });
 
-// DELETE a specific ad by ID (bypass My Ads page extraction)
+// DELETE a specific ad by navigating to it and using Inertia delete
 app.get('/delete-ad', async (req, res) => {
   try {
     const mzad = require('./mzad');
     const page = mzad._getPage ? mzad._getPage() : null;
     if (!page) return res.status(500).json({ error: 'No browser page' });
     const adId = req.query.id;
-    if (!adId) return res.status(400).json({ error: 'Missing ?id=XXXXX parameter' });
+    if (!adId) return res.status(400).json({ error: 'Missing ?id=XXXXX' });
 
-    // Navigate to mzadqatar.com so cookies and fetch work
+    // Navigate to My Ads first
     await page.goto('https://www.mzadqatar.com/en/user/profile/myads', { waitUntil: 'networkidle2', timeout: 30000 });
 
-    const cookies = await page.cookies();
-    let xsrf = '';
-    for (const c of cookies) { if (c.name === 'XSRF-TOKEN') xsrf = decodeURIComponent(c.value); }
-
-    const delResult = await page.evaluate(async (adId, csrfToken) => {
+    // Try approach 1: Inertia router delete
+    const result = await page.evaluate(async (adId) => {
       try {
-        const res = await fetch('https://www.mzadqatar.com/en/delete_advertise/' + adId, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest',
-            'X-XSRF-TOKEN': csrfToken,
-            'Accept': 'application/json',
-          },
-          body: JSON.stringify({ _method: 'DELETE' }),
-          credentials: 'include',
-        });
-        const text = await res.text();
-        return { status: res.status, body: text.substring(0, 500) };
-      } catch(e) { return { error: e.message }; }
-    }, adId, xsrf);
+        // Get XSRF from cookie
+        const cookies = document.cookie.split(';');
+        let xsrf = '';
+        for (const c of cookies) {
+          const [k,v] = c.trim().split('=');
+          if (k === 'XSRF-TOKEN') xsrf = decodeURIComponent(v);
+        }
 
-    console.log('[delete-ad] Delete ad', adId, ':', JSON.stringify(delResult));
-    res.json({ status: 'done', adId, result: delResult });
+        // Try multiple delete URL patterns
+        const urls = [
+          'https://www.mzadqatar.com/en/delete_advertise/' + adId,
+          'https://www.mzadqatar.com/delete_advertise/' + adId,
+          'https://www.mzadqatar.com/en/user/delete_advertise/' + adId,
+        ];
+        const results = [];
+        for (const url of urls) {
+          try {
+            const r = await fetch(url, {
+              method: 'DELETE',
+              headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-XSRF-TOKEN': xsrf,
+                'X-Inertia': 'true',
+                'Accept': 'text/html, application/xhtml+xml',
+              },
+              credentials: 'include',
+            });
+            const t = await r.text();
+            results.push({ url, status: r.status, body: t.substring(0,300) });
+          } catch(e) {
+            results.push({ url, error: e.message });
+          }
+        }
+
+        // Also try POST with _method DELETE
+        try {
+          const r2 = await fetch('https://www.mzadqatar.com/en/delete_advertise/' + adId, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest',
+              'X-XSRF-TOKEN': xsrf,
+              'X-Inertia': 'true',
+              'Accept': 'text/html, application/xhtml+xml',
+            },
+            body: JSON.stringify({ _method: 'DELETE' }),
+            credentials: 'include',
+          });
+          const t2 = await r2.text();
+          results.push({ url: 'POST+DELETE_METHOD', status: r2.status, body: t2.substring(0,300) });
+        } catch(e) {
+          results.push({ url: 'POST+DELETE_METHOD', error: e.message });
+        }
+
+        return { xsrf: xsrf ? 'present' : 'missing', results };
+      } catch(e) { return { error: e.message }; }
+    }, adId);
+
+    // Navigate back to add_advertise
+    await page.goto('https://www.mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+
+    res.json({ status: 'done', adId, result });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
