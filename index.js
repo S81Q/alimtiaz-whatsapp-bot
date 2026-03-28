@@ -615,6 +615,36 @@ app.get('/test-other-cat', async (req, res) => {
   }
 });
 
+// Test posting via Inertia router (uses the real form code path)
+app.get('/test-inertia-post', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const { postAdViaInertia } = require('./mzad-ui-post');
+    const session = await mzad.getSession();
+    if (!session) return res.status(500).json({ error: 'No session' });
+
+    // Get browser page from mzad module
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No browser page. Login first via /mzad-send-otp + /mzad-verify-otp' });
+
+    const catId = parseInt(req.query.cat) || 8494;
+    const testProp = {
+      Unit: 'INERTIA-TEST-1',
+      Type: 'Apartment',
+      Location: 'Doha',
+      Region: 'D-Ring',
+      Bedrooms: '2', Bathrooms: '2', Size_sqm: '100', Floor: '1',
+      Rent_QAR: '5000', Maps_Link: '', Notes: '',
+    };
+    if (catId !== 8494) testProp._overrideCategory = catId;
+
+    const result = await postAdViaInertia(page, testProp);
+    res.json({ status: 'done', result });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
 // Diagnostic: Get category groups and subscription info
 app.get('/debug-groups', async (req, res) => {
   try {

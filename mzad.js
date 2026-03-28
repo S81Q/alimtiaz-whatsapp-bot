@@ -1290,5 +1290,5 @@ async function verifyOtpOnly(otpCode) {
   return { success: true, message: 'Logged in successfully. Session stored. Ready to post ads.', sessionLength: finalSession.length };
 }
 
-module.exports = { getSession, postAd, closeBrowser, getGroupsData, getAccountStatus, sendOtpOnly, verifyOtpOnly };
+module.exports = { getSession, postAd, closeBrowser, getGroupsData, getAccountStatus, sendOtpOnly, verifyOtpOnly, _getPage: () => _page };
  
