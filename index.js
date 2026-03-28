@@ -759,8 +759,34 @@ app.get('/account-status', async (req, res) => {
   }
 });
 
+
+// ── Manual OTP login (2-phase) ──
+app.get('/mzad-send-otp', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const result = await mzad.sendOtpOnly();
+    res.json(result);
+  } catch (e) {
+    logError(e);
+    res.json({ error: e.message, stack: e.stack });
+  }
+});
+
+app.get('/mzad-verify-otp', async (req, res) => {
+  try {
+    const code = req.query.code;
+    if (!code) return res.json({ error: 'Missing ?code=XXXXXX parameter' });
+    const mzad = require('./mzad');
+    const result = await mzad.verifyOtpOnly(code);
+    res.json(result);
+  } catch (e) {
+    logError(e);
+    res.json({ error: e.message, stack: e.stack });
+  }
+});
+
 app.get('/version', (req, res) => {
-  res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'fix-skip-step2-match-real-form' });
+  res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'manual-otp-login-endpoints' });
 });
 
 app.get('/health', (req, res) => {

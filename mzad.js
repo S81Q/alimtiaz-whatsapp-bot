@@ -1136,6 +1136,137 @@ async function getAccountStatus() {
   }
 }
 
-module.exports = { getSession, postAd, closeBrowser, getGroupsData, getAccountStatus };
-module.exports = { getSession, postAd, closeBrowser, getGroupsData };
+
+
+// ═══════════════════════════════════════════════════════════
+// Manual OTP login (2-phase)
+// ═══════════════════════════════════════════════════════════
+async function sendOtpOnly() {
+  const phone = process.env.MZAD_PHONE || '70297066';
+  const page = await getBrowserPage();
+  console.log('[Mzad Manual] On login page, URL:', page.url());
+
+  const inertiaVer = await getInertiaVersion(page);
+  const cookies = await page.cookies();
+  let xsrf = '';
+  for (const c of cookies) { if (c.name === 'XSRF-TOKEN') xsrf = c.value; }
+  const csrf = decodedXsrf(xsrf);
+
+  // Get reCAPTCHA token
+  let recaptchaToken = null;
+  try {
+    await page.waitForFunction(() => typeof grecaptcha !== 'undefined' && typeof grecaptcha.execute === 'function', { timeout: 10000 });
+    recaptchaToken = await page.evaluate(async (siteKey) => {
+      return await grecaptcha.execute(siteKey, { action: 'login' });
+    }, MZAD_RECAPTCHA_SITE_KEY);
+    console.log('[Mzad Manual] reCAPTCHA token obtained');
+  } catch (e) {
+    console.warn('[Mzad Manual] Browser reCAPTCHA failed:', e.message);
+    recaptchaToken = await solveRecaptchaV3('login');
+  }
+
+  // Send OTP
+  console.log('[Mzad Manual] Sending OTP for phone:', phone);
+  const otpRes = await page.evaluate(async (baseUrl, ph, token, csrfToken, ver) => {
+    try {
+      const res = await fetch(baseUrl + '/en/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Inertia': 'true',
+          'X-Inertia-Version': ver || '',
+          'X-XSRF-TOKEN': csrfToken,
+          'Accept': 'text/html, application/xhtml+xml',
+        },
+        body: JSON.stringify({ phone: ph, otp: '', countryId: 176, countryCode: '974', recaptchaToken: token || '' }),
+        credentials: 'include',
+      });
+      const text = await res.text();
+      return { status: res.status, body: text.substring(0, 500), ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, BASE_URL, phone, recaptchaToken, csrf, inertiaVer);
+
+  console.log('[Mzad Manual] OTP send result:', JSON.stringify(otpRes));
+
+  if (otpRes.body && otpRes.body.includes('three times in one hour')) {
+    return { success: false, error: 'RATE_LIMITED: 3 OTPs/hour exceeded. Wait 1 hour.' };
+  }
+
+  return { success: true, message: 'OTP sent to phone ' + phone + '. Now call /mzad-verify-otp?code=XXXXXX', otpResponse: otpRes };
+}
+
+async function verifyOtpOnly(otpCode) {
+  if (!_page) throw new Error('No browser page. Call /mzad-send-otp first.');
+  const phone = process.env.MZAD_PHONE || '70297066';
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  const cookies2 = await _page.cookies();
+  let xsrf2 = '';
+  for (const c of cookies2) { if (c.name === 'XSRF-TOKEN') xsrf2 = c.value; }
+  const csrf2 = decodedXsrf(xsrf2);
+  const inertiaVer = _inertiaVersion || '';
+
+  const otpDigits = otpCode.toString().padEnd(6, '0').split('').slice(0, 6);
+  console.log('[Mzad Manual] Verifying OTP:', otpCode);
+  
+  const verifyRes = await _page.evaluate(async (baseUrl, ph, otp, digits, csrfToken, ver) => {
+    try {
+      const res = await fetch(baseUrl + '/en/login-verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Inertia': 'true',
+          'X-Inertia-Version': ver || '',
+          'X-XSRF-TOKEN': csrfToken,
+          'Accept': 'text/html, application/xhtml+xml',
+        },
+        body: JSON.stringify({
+          otp_0: digits[0], otp_1: digits[1], otp_2: digits[2],
+          otp_3: digits[3], otp_4: digits[4], otp_5: digits[5],
+          otp: otp, username: ph, countryId: 176, countryCode: '974',
+        }),
+        credentials: 'include',
+      });
+      const text = await res.text();
+      return { status: res.status, body: text.substring(0, 500), ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, BASE_URL, phone, otpCode, otpDigits, csrf2, inertiaVer);
+
+  console.log('[Mzad Manual] Verify result:', JSON.stringify(verifyRes));
+
+  // Validate by navigating to add_advertise
+  await delay(2000);
+  await _page.goto(BASE_URL + '/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+  const finalUrl = _page.url();
+
+  if (finalUrl.includes('/login')) {
+    return { success: false, error: 'Login failed after OTP verify', verifyRes };
+  }
+
+  // Get Inertia version
+  _inertiaVersion = '';
+  await getInertiaVersion(_page);
+
+  // Extract cookies
+  const finalCookies = await _page.cookies();
+  let finalSession = '', finalXsrf = '';
+  for (const c of finalCookies) {
+    if (c.name === 'mzadqatar_session') finalSession = c.value;
+    if (c.name === 'XSRF-TOKEN') finalXsrf = c.value;
+  }
+
+  process.env.MZAD_SESSION = finalSession;
+  process.env.MZAD_XSRF_TOKEN = finalXsrf;
+  console.log('[Mzad Manual] Login successful! Session:', finalSession.length, 'chars');
+  
+  return { success: true, message: 'Logged in successfully. Session stored. Ready to post ads.', sessionLength: finalSession.length };
+}
+
+module.exports = { getSession, postAd, closeBrowser, getGroupsData, getAccountStatus, sendOtpOnly, verifyOtpOnly };
  

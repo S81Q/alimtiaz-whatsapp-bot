@@ -66,7 +66,7 @@ async function readOtpFromGmail(platform, maxRetries = 3, retryDelay = 10000, mi
   // Body format: "Incoming - QatarSale ... Confirmation code is : 123456"
   const queryMap = {
     qatarsale: `from:sms-forwarder QatarSale newer_than:5m`,
-    mzad: `from:sms-forwarder MzadQatar newer_than:5m`,
+    mzad: `(from:sms-forwarder OR from:mzadqatar OR from:noreply OR subject:code OR subject:OTP OR subject:verification) (MzadQatar OR mzad OR code) newer_than:10m`,
   };
   const query = queryMap[platform.toLowerCase()] || `from:sms-forwarder newer_than:5m`;
 
