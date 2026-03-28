@@ -566,21 +566,6 @@ async function postAd(property, sessionData) {
     serverStep1Data = s1props?.props?.getAddAdvertiseData?.prevData?.step1Data || null;
     console.log('[Mzad] Server step1Data prevData:', JSON.stringify(serverStep1Data));
   } catch (e) { console.warn('[Mzad] Could not extract step1 prevData:', e.message); }
-
-  // ── Check User Subscription (required by Mzad server before step 3 can create ads) ──
-  console.log('[Mzad] Checking user subscription for category:', categoryId);
-  try {
-    const subCheckRes = await inertiaPost(`${BASE_URL}/en/classified/check-user-subscription`, {
-      categoryId: categoryId,
-    }, session, xsrf);
-    console.log('[Mzad] Subscription check status:', subCheckRes.status);
-    console.log('[Mzad] Subscription check data:', JSON.stringify(subCheckRes.data).substring(0, 500));
-    if (subCheckRes.cookies['mzadqatar_session']) session = subCheckRes.cookies['mzadqatar_session'];
-    if (subCheckRes.cookies['XSRF-TOKEN']) xsrf = subCheckRes.cookies['XSRF-TOKEN'];
-  } catch (e) {
-    console.warn('[Mzad] Subscription check failed (continuing anyway):', e.message);
-  }
-
   // ── STEP 2: Property details ──
   console.log('[Mzad] Step 2: Submitting property details...');
 
@@ -844,8 +829,16 @@ async function postAd(property, sessionData) {
   console.log('[Mzad] Step 3 response status:', step3Res.status);
   console.log('[Mzad] Step 3 response data:', JSON.stringify(step3Res.data).substring(0, 2000));
 
-  // Check for errors
+  // Extract and log apiData separately (it gets truncated in the main data log)
   const s3data = step3Res.data;
+  const s3ApiData = s3data?.getAddAdvertiseData?.apiData;
+  if (s3ApiData) {
+    console.log('[Mzad] Step 3 apiData:', JSON.stringify(s3ApiData));
+    if (s3ApiData.didNotSaved) {
+      console.error('[Mzad] Server says didNotSaved:', s3ApiData.message || 'no message');
+    }
+  }
+  console.log('[Mzad] Step 3 url:', s3data?.url, 'step:', s3data?.getAddAdvertiseData?.step);
   const errors = s3data?.errors || s3data?.props?.errors;
   if (errors && Object.keys(errors).length > 0) {
     console.error('[Mzad] Validation errors:', JSON.stringify(errors));
@@ -990,13 +983,13 @@ async function postAd(property, sessionData) {
     };
   }
 
-  console.log(`[Mzad] ===== Ad posted successfully for unit ${property.Unit}! =====`);
+  console.log(`[Mzad] ===== Ad posted for unit ${property.Unit}! =====`);
   return {
     success: true,
     unit: property.Unit,
-    step1: { status: step1Res.status, data: JSON.stringify(step1Res.data).substring(0, 500) },
-    step2: { status: step2Res.status, data: JSON.stringify(step2Res.data).substring(0, 500) },
-    step3: { status: step3Res.status, data: JSON.stringify(step3Res.data).substring(0, 1500) },
+    step1: { status: step1Res.status },
+    step2: { status: step2Res.status },
+    step3: { status: step3Res.status, url: s3data?.url, apiData: s3ApiData || null, step: s3data?.getAddAdvertiseData?.step },
   };
 }
 
