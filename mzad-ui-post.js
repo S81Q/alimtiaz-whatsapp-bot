@@ -61,7 +61,7 @@ async function postAdViaInertia(page, property) {
               step: gAAD?.prevData?.step,
               prevDataKeys: gAAD?.prevData ? Object.keys(gAAD.prevData) : [],
               apiDataKeys: gAAD?.apiData ? Object.keys(gAAD.apiData) : [],
-              step2Data: gAAD?.prevData?.step2Data || null,
+              step2Data: gAAD?.prevData?.step2Data || null, groups: gAAD?.apiData?.groups ? gAAD.apiData.groups.map(function(g){return{groupName:g.groupName,products:(g.products||[]).map(function(p){return{productId:p.productId,isAllowToAdd:p.isAllowToAdd}})}}) : null,
             });
           },
           onError: (errors) => {
@@ -76,6 +76,22 @@ async function postAdViaInertia(page, property) {
     });
   }, categoryId);
   log('Step 1 result: ' + JSON.stringify(step1Result));
+
+  // Extract free productId from groups
+  let freeProductId = '';
+  if (step1Result.groups) {
+    for (const g of step1Result.groups) {
+      for (const p of (g.products || [])) {
+        if (p.isAllowToAdd) {
+          freeProductId = String(p.productId);
+          log('Found free productId: ' + freeProductId);
+          break;
+        }
+      }
+      if (freeProductId) break;
+    }
+  }
+  if (!freeProductId) log('WARNING: No free productId found');
 
   if (!step1Result.ok) {
     return { success: false, error: 'Step 1 failed', details: step1Result };
@@ -163,7 +179,7 @@ async function postAdViaInertia(page, property) {
   const imgBase64 = fs.readFileSync(imgPath).toString('base64');
 
   log('Step 3: Submitting ad content via Inertia...');
-  const step3Result = await page.evaluate(async (catId, price, tEn, tAr, desc, imgB64, s2Data) => {
+  const step3Result = await page.evaluate(async (catId, price, tEn, tAr, desc, imgB64, s2Data, fpId) => {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         // On timeout, check page state
@@ -202,7 +218,7 @@ async function postAdViaInertia(page, property) {
             agree_commission: true,
             currencyId: '1',
             isResetImages: false,
-            productId: '',
+            productId: fpId || '',
             images: [
               { id: '0', type: 'image/jpeg', url: '', tempFile: file }
             ],

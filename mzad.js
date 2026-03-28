@@ -666,6 +666,34 @@ async function postAd(property, sessionData) {
     }
   } catch(e) { console.warn("[Mzad] Groups extraction from step1 failed:", e.message); }
 
+  // Extract the free productId from groups (REQUIRED for step 3)
+  let freeProductId = '';
+  const grpSrc = groupsData || pageGroupsData;
+  if (grpSrc && grpSrc.groups) {
+    for (const g of grpSrc.groups) {
+      for (const p of (g.products || [])) {
+        if (p.isAllowToAdd) {
+          freeProductId = String(p.productId);
+          console.log('[Mzad] Found free productId:', freeProductId, 'group:', g.groupName);
+          break;
+        }
+      }
+      if (freeProductId) break;
+    }
+  }
+  if (!freeProductId) {
+    console.warn('[Mzad] WARNING: No free productId found! Will try adsSelectedData...');
+    try {
+      const s1f = typeof step1Res.data === 'string' ? JSON.parse(step1Res.data) : step1Res.data;
+      const asd = s1f?.props?.getAddAdvertiseData?.adsSelectedData;
+      if (asd) {
+        console.log('[Mzad] adsSelectedData:', JSON.stringify(asd).substring(0, 500));
+        if (asd.productId) freeProductId = String(asd.productId);
+      }
+    } catch(e2) {}
+  }
+  console.log('[Mzad] productId for step3:', freeProductId || '(empty)');
+
   // Check if server already advanced past step 2 (e.g. category skips step 2)
   let serverStep2Data = null;
   let step2Res = { status: 200, data: {}, cookies: {} }; // default for skipped step 2
@@ -800,7 +828,7 @@ async function postAd(property, sessionData) {
     console.log('[Mzad] Step 3: Using browser fetch with FormData...');
     const csrf = decodedXsrf(xsrf);
     const ver = _inertiaVersion || '';
-    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer, s1Data, s2Data, curId) => {
+    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer, s1Data, s2Data, curId, prodId) => {
       // Convert base64 to Blob
       const byteChars = atob(imgB64);
       const byteArr = new Uint8Array(byteChars.length);
@@ -850,7 +878,7 @@ async function postAd(property, sessionData) {
         agree_commission: '1',
         currencyId: String(curId || 1),
         isResetImages: '0',
-        productId: '',
+        productId: prodId || '',
         images: [
           { id: '0', type: 'image/jpeg', url: '', tempFile: blob }
         ],
@@ -904,7 +932,7 @@ async function postAd(property, sessionData) {
       }
       return { status: res.status, data: json ? { component: json.component, props_keys: Object.keys(json.props || {}), errors: json.props?.errors, step: json.props?.step, flash: json.props?.flash, url: json.url, redirectBackData: json.props?.redirectBackData || null, getAddAdvertiseData: json.props?.getAddAdvertiseData ? { step: json.props.getAddAdvertiseData.prevData?.step, prevData: json.props.getAddAdvertiseData.prevData, adsSelectedData: json.props.getAddAdvertiseData.adsSelectedData, apiData: apiDataSafe } : null, currencies: json.props?.settingsData?.currencies?.slice(0, 3) } : text.substring(0, 500), fullLen: text.length, isJson: !!json };
     }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver,
-       serverStep1Data || { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, serverStep2Data || (typeof step2Data !== 'undefined' ? step2Data : {}), currencyId);
+       serverStep1Data || { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, serverStep2Data || (typeof step2Data !== 'undefined' ? step2Data : {}), currencyId, freeProductId || '');
     // Wrap to match expected format
     step3Res = { status: step3Res.status, data: step3Res.data };
   } else {
