@@ -619,13 +619,14 @@ async function postAd(property, sessionData) {
   // Extract server-returned prevData from step 1 (Inertia form restores these before step 3)
   let serverStep1Data = null;
   let serverStep = null;
+  let s1PrevStep2Data = null;
   try {
     const s1props = typeof step1Res.data === 'string' ? JSON.parse(step1Res.data) : step1Res.data;
     serverStep1Data = s1props?.props?.getAddAdvertiseData?.prevData?.step1Data || null;
     serverStep = s1props?.props?.getAddAdvertiseData?.prevData?.step;
     console.log('[Mzad] Server prevData.step after step 1:', serverStep);
     // Also extract step2Data from Step 1 prevData (server pre-fills when Step 2 is skipped)
-    const s1PrevStep2Data = s1props?.props?.getAddAdvertiseData?.prevData?.step2Data || null;
+    s1PrevStep2Data = s1props?.props?.getAddAdvertiseData?.prevData?.step2Data || null;
     console.log('[Mzad] Server step2Data from step1:', s1PrevStep2Data ? JSON.stringify(s1PrevStep2Data).substring(0, 300) : 'null');
     console.log('[Mzad] Server step1Data prevData:', JSON.stringify(serverStep1Data));
   } catch (e) { console.warn('[Mzad] Could not extract step1 prevData:', e.message); }
