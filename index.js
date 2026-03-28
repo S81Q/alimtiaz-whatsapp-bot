@@ -583,6 +583,38 @@ app.get('/debug-mzad-steps', async (req, res) => {
   }
 });
 
+// Test posting in "Others" category (productId=9) to check if account-wide issue
+app.get('/test-other-cat', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const session = await mzad.getSession();
+    if (!session) return res.status(500).json({ error: 'No session' });
+    
+    // Minimal property for "Others" category
+    const testProp = {
+      Unit: 'OTHER-TEST-1',
+      Type: 'Other',
+      Location: 'Doha',
+      Region: 'Doha',
+      Bedrooms: '0',
+      Bathrooms: '0',
+      Size_sqm: '0',
+      Floor: '0',
+      Rent_QAR: '100',
+      Maps_Link: '',
+      Notes: 'Test posting in Others category',
+    };
+    
+    // Override category to "Others" (productId=9)
+    testProp._overrideCategory = 9;
+    
+    const result = await mzad.postAd(testProp, session);
+    res.json({ status: 'done', result });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
 // Diagnostic: Get category groups and subscription info
 app.get('/debug-groups', async (req, res) => {
   try {

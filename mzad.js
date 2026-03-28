@@ -511,7 +511,8 @@ async function getPlaceholderImage() {
 async function postAd(property, sessionData) {
   let { session, xsrf } = sessionData;
   const isComm = isCommercialType(property.Type);
-  const categoryId = isComm ? CATEGORY_COMMERCIAL_RENT : CATEGORY_RESIDENTIAL_RENT;
+  let categoryId = isComm ? CATEGORY_COMMERCIAL_RENT : CATEGORY_RESIDENTIAL_RENT;
+  if (property._overrideCategory) categoryId = property._overrideCategory;
 
   console.log(`[Mzad] ===== Posting ad for unit ${property.Unit} =====`);
   console.log(`[Mzad] Type: ${property.Type} | Category: ${categoryId} | Commercial: ${isComm}`);
