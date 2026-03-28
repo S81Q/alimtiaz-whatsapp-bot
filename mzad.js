@@ -860,6 +860,19 @@ async function postAd(property, sessionData) {
       // Double-append removed - appendFormData already handles step3Obj
       END OLD MANUAL APPENDS */
 
+      // Log FormData entries for debugging
+      const fdEntries = [];
+      for (const [k, v] of fd.entries()) {
+        if (v instanceof Blob) {
+          fdEntries.push(k + ' = [Blob ' + v.size + ' bytes ' + v.type + ']');
+        } else {
+          fdEntries.push(k + ' = ' + String(v).substring(0, 100));
+        }
+      }
+      console.log('[Mzad-Debug] Step3 FD entries(' + fdEntries.length + '):', fdEntries.slice(0, 30).join(' | '));
+      console.log('[Mzad-Debug] s1Data:', JSON.stringify(s1Data).substring(0, 500));
+      console.log('[Mzad-Debug] s2Data:', JSON.stringify(s2Data).substring(0, 500));
+
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -884,7 +897,8 @@ async function postAd(property, sessionData) {
           didNotSaved: ad.didNotSaved,
           status: ad.status,
           errorType: ad.errorType,
-          message: ad.message,
+          message: ad.message || ad.statusMsg,
+          statusMsg: ad.statusMsg,
           groups_count: ad.groups ? ad.groups.length : null,
         };
       }
