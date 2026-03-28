@@ -1012,6 +1012,36 @@ app.get('/post-vacant', async (req, res) => {
     prop._overrideCategory = 9;
 
     console.log('[post-vacant] Posting unit', unit, ':', JSON.stringify(prop));
+
+    // Pre-delete: try to free ad slots by deleting old ads
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (page) {
+      try {
+        await page.goto('https://www.mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+        const delRes = await page.evaluate(async () => {
+          try {
+            const cookies = document.cookie.split(';');
+            let xsrf = '';
+            for (const ck of cookies) { const [k,v] = ck.trim().split('='); if (k === 'XSRF-TOKEN') xsrf = decodeURIComponent(v); }
+            const knownIds = [94313102];
+            const results = [];
+            for (const id of knownIds) {
+              try {
+                const dr = await fetch('/en/delete_advertise/' + id, {
+                  method: 'DELETE',
+                  headers: { 'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+                  credentials: 'include'
+                });
+                results.push({ id, status: dr.status });
+              } catch(e) { results.push({ id, err: e.message }); }
+            }
+            return { xsrf: xsrf ? 'yes' : 'no', results };
+          } catch(e) { return { error: e.message }; }
+        });
+        console.log('[post-vacant] Pre-delete result:', JSON.stringify(delRes));
+      } catch(e) { console.log('[post-vacant] Pre-delete error:', e.message); }
+    }
+
     const result = await mzad.postAd(prop, session);
     res.json({ status: 'done', unit, result });
   } catch(e) {
