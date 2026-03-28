@@ -536,37 +536,59 @@ async function postAd(property, sessionData) {
 
   // Extract groups/categories from the add_advertise page (for diagnosis)
   let groupsData = null;
+  console.log("[Mzad] Groups extraction: _page exists:", !!_page);
   if (_page) {
     try {
+      const pageUrl = _page.url();
+      console.log("[Mzad] Current page URL for groups:", pageUrl);
       groupsData = await _page.evaluate(() => {
-        const el = document.querySelector('[data-page]');
-        if (!el) return { error: 'no data-page' };
-        const pd = JSON.parse(el.getAttribute('data-page'));
-        const gAAD = pd?.props?.getAddAdvertiseData;
-        if (!gAAD?.apiData?.groups) return { error: 'no groups', gAADKeys: Object.keys(gAAD || {}), apiDataKeys: gAAD?.apiData ? Object.keys(gAAD.apiData) : null };
-        const allProds = gAAD.apiData.groups.flatMap(g => g.products || []);
-        return {
-          totalGroups: gAAD.apiData.groups.length,
-          totalProducts: allProds.length,
-          groups: gAAD.apiData.groups.map(g => ({
-            groupName: g.groupName,
-            clicktype: g.clicktype,
-            products: (g.products || []).map(p => ({
-              productId: p.productId,
-              productName: p.productName,
-              isAllowToAdd: p.isAllowToAdd,
-              packageTag: p.packageTag || null,
-              adsCount: p.adsCount,
-              adsLimit: p.adsLimit,
-            }))
-          })),
-          cat8494: allProds.find(p => String(p.productId) === '8494') || 'NOT FOUND',
-          isLoggedIn: pd.props?.isLoggedIn,
-          component: pd.component,
-        };
+        try {
+          const el = document.querySelector("[data-page]");
+          if (!el) return { extractError: "no data-page element", bodyLen: document.body?.innerHTML?.length || 0 };
+          const raw = el.getAttribute("data-page");
+          if (!raw) return { extractError: "data-page attr is empty" };
+          const pd = JSON.parse(raw);
+          const comp = pd.component;
+          const url = pd.url;
+          const isLoggedIn = pd.props?.isLoggedIn;
+          const propsKeys = Object.keys(pd.props || {});
+          const gAAD = pd?.props?.getAddAdvertiseData;
+          if (!gAAD) return { extractError: "no getAddAdvertiseData", component: comp, url: url, isLoggedIn: isLoggedIn, propsKeys: propsKeys };
+          const apiData = gAAD.apiData;
+          if (!apiData) return { extractError: "no apiData", gAADKeys: Object.keys(gAAD), component: comp, isLoggedIn: isLoggedIn };
+          if (!apiData.groups) return { extractError: "no groups in apiData", apiDataKeys: Object.keys(apiData), component: comp, isLoggedIn: isLoggedIn };
+          const allProds = apiData.groups.flatMap(g => g.products || []);
+          return {
+            totalGroups: apiData.groups.length,
+            totalProducts: allProds.length,
+            groups: apiData.groups.map(g => ({
+              groupName: g.groupName,
+              clicktype: g.clicktype,
+              productCount: (g.products || []).length,
+              products: (g.products || []).slice(0, 5).map(p => ({
+                productId: p.productId,
+                productName: p.productName,
+                isAllowToAdd: p.isAllowToAdd,
+                packageTag: p.packageTag || null,
+                adsCount: p.adsCount,
+                adsLimit: p.adsLimit,
+              }))
+            })),
+            cat8494: allProds.find(p => String(p.productId) === "8494") || "NOT FOUND",
+            isLoggedIn: isLoggedIn,
+            component: comp,
+          };
+        } catch(innerErr) {
+          return { extractError: "evaluate inner error: " + innerErr.message };
+        }
       });
-      console.log('[Mzad] Groups extraction:', JSON.stringify(groupsData).substring(0, 3000));
-    } catch(e) { console.warn('[Mzad] Groups extraction failed:', e.message); }
+      console.log("[Mzad] Groups extraction result:", JSON.stringify(groupsData).substring(0, 3000));
+    } catch(e) {
+      groupsData = { extractError: "outer catch: " + e.message };
+      console.warn("[Mzad] Groups extraction failed:", e.message);
+    }
+  } else {
+    groupsData = { extractError: "_page is null" };
   }
 
   // ── STEP 1: Language + Category ──
