@@ -819,6 +819,121 @@ app.get('/version', (req, res) => {
   res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'fix-step2data-from-step1-prevdata' });
 });
 
+
+
+// DELETE all ads from Mzad account (frees up ad slots)
+app.get('/delete-all-ads', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No browser page. Login first via /mzad-send-otp + /mzad-verify-otp' });
+
+    // Navigate to My Ads page
+    await page.goto('https://www.mzadqatar.com/en/user/profile/myads', { waitUntil: 'networkidle2', timeout: 30000 });
+    const pageUrl = page.url();
+    if (pageUrl.includes('/login')) return res.json({ error: 'Session expired - redirected to login' });
+
+    // Extract ads from Inertia page data
+    const adsData = await page.evaluate(() => {
+      try {
+        const el = document.querySelector('[data-page]');
+        if (!el) return { error: 'no data-page' };
+        const pd = JSON.parse(el.getAttribute('data-page'));
+        const myProds = pd.props?.myProductsData?.data || pd.props?.getMyProductsData?.data || [];
+        return {
+          component: pd.component,
+          totalAds: myProds.length,
+          ads: myProds.map(a => ({
+            id: a.productId || a.id,
+            title: a.productName || a.productNameEnglish || '',
+            price: a.productPrice || '',
+            status: a.status,
+            slug: a.productSlug || a.slug || '',
+          }))
+        };
+      } catch(e) { return { error: e.message }; }
+    });
+
+    if (adsData.error) return res.json({ error: adsData.error });
+    if (!adsData.ads || adsData.ads.length === 0) return res.json({ status: 'no_ads', message: 'No ads found to delete' });
+
+    console.log('[delete-all-ads] Found', adsData.ads.length, 'ads:', JSON.stringify(adsData.ads));
+
+    // Delete each ad
+    const results = [];
+    for (const ad of adsData.ads) {
+      try {
+        // Get XSRF token from cookies
+        const cookies = await page.cookies();
+        let xsrf = '';
+        for (const c of cookies) { if (c.name === 'XSRF-TOKEN') xsrf = decodeURIComponent(c.value); }
+
+        const delResult = await page.evaluate(async (adId, csrfToken) => {
+          try {
+            const res = await fetch('https://www.mzadqatar.com/en/delete_advertise/' + adId, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-XSRF-TOKEN': csrfToken,
+                'Accept': 'application/json',
+              },
+              body: JSON.stringify({ _method: 'DELETE' }),
+              credentials: 'include',
+            });
+            const text = await res.text();
+            return { status: res.status, body: text.substring(0, 500) };
+          } catch(e) { return { error: e.message }; }
+        }, ad.id, xsrf);
+
+        console.log('[delete-all-ads] Delete ad', ad.id, ':', JSON.stringify(delResult));
+        results.push({ id: ad.id, title: ad.title, ...delResult });
+      } catch(e) {
+        results.push({ id: ad.id, title: ad.title, error: e.message });
+      }
+    }
+
+    // Navigate back to add_advertise for future operations
+    await page.goto('https://www.mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+
+    res.json({ status: 'done', adsFound: adsData.ads.length, results });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
+// POST a specific vacant unit from the properties sheet
+app.get('/post-vacant', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const session = await mzad.getSession();
+    if (!session) return res.status(500).json({ error: 'No session' });
+
+    const unit = req.query.unit; // e.g., P26, P48, P49
+    if (!unit) return res.status(400).json({ error: 'Missing ?unit=P26 parameter' });
+
+    // Vacant properties data (from March 2026 report + Google Sheet)
+    const vacantProperties = {
+      'P26': { Unit: 'P26', Type: 'Labor Camp', Location: 'سكن عمال الصناعية 24', Rent_QAR: '', Maps_Link: 'https://maps.app.goo.gl/bsVeGSo9JQwpH4kY8', Notes: 'Remaining room to be rented' },
+      'P48': { Unit: 'P48', Type: 'Commercial', Location: 'شقة - تم إرجاعها', Rent_QAR: '', Maps_Link: '', Notes: 'Apartment returned' },
+      'P49': { Unit: 'P49', Type: 'Commercial', Location: 'غرفة شاغرة', Rent_QAR: '', Maps_Link: '', Notes: 'Room vacant - searching for new tenant' },
+      'P6A': { Unit: 'P6A', Type: 'Warehouse', Location: 'مخزن بركة العوامر', Rent_QAR: '', Maps_Link: 'https://goo.gl/maps/opk6AP9dXuW8WZeE8', Notes: 'Payment not received' },
+    };
+
+    const prop = vacantProperties[unit.toUpperCase()];
+    if (!prop) return res.status(400).json({ error: 'Unknown unit: ' + unit, available: Object.keys(vacantProperties) });
+
+    // Override to category 9 (Others - free category)
+    prop._overrideCategory = 9;
+
+    console.log('[post-vacant] Posting unit', unit, ':', JSON.stringify(prop));
+    const result = await mzad.postAd(prop, session);
+    res.json({ status: 'done', unit, result });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', version: 'v3-ad-poster' });
 });
