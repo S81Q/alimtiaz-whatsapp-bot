@@ -596,14 +596,12 @@ async function postAd(property, sessionData) {
   // ── STEP 1: Language + Category ──
   console.log('[Mzad] Step 1: Submitting language + category...');
   const step1Res = await inertiaPost(`${BASE_URL}/en/add_advertise`, {
-    step: 1,
     step1Data: {
       categoryId: categoryId,
       lang: 'aren',          // Both Arabic and English
       mzadyUserNumber: '',
     },
-    step2Data: {},
-    step3Data: {},
+    step: 1,
   }, session, xsrf);
 
   console.log('[Mzad] Step 1 response status:', step1Res.status);
@@ -620,9 +618,12 @@ async function postAd(property, sessionData) {
 
   // Extract server-returned prevData from step 1 (Inertia form restores these before step 3)
   let serverStep1Data = null;
+  let serverStep = null;
   try {
     const s1props = typeof step1Res.data === 'string' ? JSON.parse(step1Res.data) : step1Res.data;
     serverStep1Data = s1props?.props?.getAddAdvertiseData?.prevData?.step1Data || null;
+    serverStep = s1props?.props?.getAddAdvertiseData?.prevData?.step;
+    console.log('[Mzad] Server prevData.step after step 1:', serverStep);
     console.log('[Mzad] Server step1Data prevData:', JSON.stringify(serverStep1Data));
   } catch (e) { console.warn('[Mzad] Could not extract step1 prevData:', e.message); }
 
@@ -662,6 +663,12 @@ async function postAd(property, sessionData) {
     }
   } catch(e) { console.warn("[Mzad] Groups extraction from step1 failed:", e.message); }
 
+  // Check if server already advanced past step 2 (e.g. category skips step 2)
+  let step2Res = { status: 200, data: {}, cookies: {} }; // default for skipped step 2
+  const shouldSkipStep2 = (typeof serverStep !== "undefined" && serverStep !== null && parseInt(serverStep) >= 2);
+  if (shouldSkipStep2) {
+    console.log("[Mzad] SKIPPING Step 2: server prevData.step =", serverStep, "(already past step 2)");
+  } else {
   // ── STEP 2: Property details ──
   console.log('[Mzad] Step 2: Submitting property details...');
 
@@ -694,7 +701,7 @@ async function postAd(property, sessionData) {
   };
 
   console.log('[Mzad] Step 2 data:', JSON.stringify(step2Data));
-  const step2Res = await inertiaPost(`${BASE_URL}/en/add_advertise`, {
+  step2Res = await inertiaPost(`${BASE_URL}/en/add_advertise`, {
     step: 2,
     step1Data: { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' },
     step2Data: step2Data,
@@ -724,6 +731,7 @@ async function postAd(property, sessionData) {
     if (prevData?.step1Data) serverStep1Data = prevData.step1Data;
   } catch (e) { console.warn('[Mzad] Could not extract step2 prevData:', e.message); }
 
+  } // end step 2 conditional
   // ── STEP 3: Title, Description, Price, Image, Publish ──
   console.log('[Mzad] Step 3: Submitting ad content + publish...');
 

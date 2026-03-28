@@ -760,7 +760,7 @@ app.get('/account-status', async (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'fix-double-append-add-account-status' });
+  res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'fix-skip-step2-match-real-form' });
 });
 
 app.get('/health', (req, res) => {
