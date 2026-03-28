@@ -1032,7 +1032,18 @@ async function postAd(property, sessionData) {
 
 // Diagnostic: Extract groups/categories data from add_advertise page
 async function getGroupsData(sessionObj) {
-  if (!_page) throw new Error('No browser page. Call getSession first.');
+  // Ensure browser page exists
+  if (!_page) {
+    console.log('[Mzad] No browser page, creating one for groups extraction...');
+    await getBrowserPage();
+    // Set session cookies if we have them
+    if (sessionObj?.session) {
+      await _page.setCookie(
+        { name: 'mzadqatar_session', value: sessionObj.session, domain: 'www.mzadqatar.com', path: '/' },
+        { name: 'XSRF-TOKEN', value: sessionObj.xsrf || '', domain: 'www.mzadqatar.com', path: '/' }
+      );
+    }
+  }
   
   console.log('[Mzad] Navigating to add_advertise page to extract groups...');
   await _page.goto('https://www.mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
