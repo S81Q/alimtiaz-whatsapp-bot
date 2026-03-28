@@ -536,12 +536,13 @@ async function postAd(property, sessionData) {
 
   // Extract groups/categories from the add_advertise page (for diagnosis)
   let groupsData = null;
+  let pageGroupsData = null;
   console.log("[Mzad] Groups extraction: _page exists:", !!_page);
   if (_page) {
     try {
       const pageUrl = _page.url();
       console.log("[Mzad] Current page URL for groups:", pageUrl);
-      groupsData = await _page.evaluate(() => {
+      pageGroupsData = await _page.evaluate(() => {
         try {
           const el = document.querySelector("[data-page]");
           if (!el) return { extractError: "no data-page element", bodyLen: document.body?.innerHTML?.length || 0 };
@@ -582,13 +583,13 @@ async function postAd(property, sessionData) {
           return { extractError: "evaluate inner error: " + innerErr.message };
         }
       });
-      console.log("[Mzad] Groups extraction result:", JSON.stringify(groupsData).substring(0, 3000));
+      console.log("[Mzad] Groups extraction result:", JSON.stringify(pageGroupsData).substring(0, 3000));
     } catch(e) {
-      groupsData = { extractError: "outer catch: " + e.message };
+      pageGroupsData = { extractError: "outer catch: " + e.message };
       console.warn("[Mzad] Groups extraction failed:", e.message);
     }
   } else {
-    groupsData = { extractError: "_page is null" };
+    pageGroupsData = { extractError: "_page is null" };
   }
 
   // ── STEP 1: Language + Category ──
@@ -1048,6 +1049,7 @@ async function postAd(property, sessionData) {
       step3: { status: step3Res.status, data: JSON.stringify(s3data).substring(0, 1000) },
       step3_resubmit: step3Res2,
       groupsData: groupsData,
+      pageGroupsData: pageGroupsData,
     };
   }
 
@@ -1086,6 +1088,7 @@ async function postAd(property, sessionData) {
     step2: { status: step2Res.status },
     step3: { status: step3Res.status, url: s3data?.url, apiData: s3ApiData || null, step: s3data?.getAddAdvertiseData?.step },
     groupsData: groupsData,
+    pageGroupsData: pageGroupsData,
   };
 }
 
