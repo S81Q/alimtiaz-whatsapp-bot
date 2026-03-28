@@ -987,6 +987,68 @@ app.get('/delete-ad', async (req, res) => {
   }
 });
 
+
+// Diagnostic: navigate to ad page, find and click delete button
+app.get('/delete-ad-ui', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No browser page' });
+    const slug = req.query.slug || 'i-need-one-94313102';
+
+    // Navigate to the actual ad page
+    await page.goto('https://www.mzadqatar.com/en/products/' + slug, { waitUntil: 'networkidle2', timeout: 30000 });
+    const pageUrl = page.url();
+
+    // Extract Inertia page data and find delete mechanism
+    const pageData = await page.evaluate(() => {
+      const el = document.querySelector('[data-page]');
+      if (!el) return { error: 'no data-page' };
+      const pd = JSON.parse(el.getAttribute('data-page'));
+      const props = pd.props || {};
+      // Look for product data with delete info
+      const keys = Object.keys(props);
+      let productData = null;
+      for (const k of keys) {
+        if (props[k] && (props[k].productId || props[k].id)) {
+          productData = { key: k, id: props[k].productId || props[k].id };
+          break;
+        }
+      }
+      // Look for delete buttons/links in DOM
+      const deleteEls = [];
+      document.querySelectorAll('button, a, [onclick]').forEach(el => {
+        const text = el.textContent || '';
+        const onclick = el.getAttribute('onclick') || '';
+        const href = el.getAttribute('href') || '';
+        if (text.toLowerCase().includes('delete') || onclick.includes('delete') || href.includes('delete')) {
+          deleteEls.push({ tag: el.tagName, text: text.trim().substring(0,50), href, onclick: onclick.substring(0,100) });
+        }
+      });
+      return {
+        component: pd.component,
+        propsKeys: keys,
+        productData,
+        deleteElements: deleteEls,
+        isOwner: props.isOwner || props.isMyProduct || props.getProductData?.isOwner || 'unknown',
+        rawSnippet: JSON.stringify(pd.props).substring(0, 1500)
+      };
+    });
+
+    // Also test if fetch works at all from this page
+    const fetchTest = await page.evaluate(async () => {
+      try {
+        const r = await fetch('/en/user/profile/myads', { credentials: 'include' });
+        return { fetchWorks: true, status: r.status };
+      } catch(e) { return { fetchWorks: false, error: e.message }; }
+    });
+
+    res.json({ pageUrl, pageData, fetchTest });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0,500) });
+  }
+});
+
 // POST a specific vacant unit from the properties sheet
 app.get('/post-vacant', async (req, res) => {
   try {
