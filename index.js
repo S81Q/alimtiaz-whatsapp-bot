@@ -671,6 +671,22 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
 });
 
+// Extract page groups data using existing browser session
+app.get('/page-data', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    // Try to get session (might reuse existing)
+    const session = await mzad.getSession();
+    if (!session) return res.json({ error: 'No session' });
+    
+    // Use getGroupsData which now creates browser if needed
+    const data = await mzad.getGroupsData(session);
+    res.json({ status: 'done', pageData: data });
+  } catch(e) {
+    res.json({ status: 'error', error: e.message });
+  }
+});
+
 app.get('/version', (req, res) => {
   res.json({ commit: '73779da-v2', deployed: new Date().toISOString(), build: 'groups-extract-with-errors' });
 });

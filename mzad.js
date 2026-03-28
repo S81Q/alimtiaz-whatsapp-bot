@@ -1094,77 +1094,81 @@ async function postAd(property, sessionData) {
 
 
 // Diagnostic: Extract groups/categories data from add_advertise page
-async function getGroupsData(sessionObj) {
-  // Ensure browser page exists
-  if (!_page) {
-    console.log('[Mzad] No browser page, creating one for groups extraction...');
-    await getBrowserPage();
-    // Set session cookies if we have them
-    if (sessionObj?.session) {
-      await _page.setCookie(
-        { name: 'mzadqatar_session', value: sessionObj.session, domain: 'www.mzadqatar.com', path: '/' },
-        { name: 'XSRF-TOKEN', value: sessionObj.xsrf || '', domain: 'www.mzadqatar.com', path: '/' }
-      );
-    }
-  }
+// Diagnostic: Navigate to add_advertise and extract ALL page data
+async function getGroupsData() {
+  if (!_page) return { error: "No browser. Call /debug-mzad-steps?fresh=1 first." };
   
-  console.log('[Mzad] Navigating to add_advertise page to extract groups...');
-  await _page.goto('https://www.mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
-  
-  const data = await _page.evaluate(() => {
-    try {
-      const el = document.querySelector('[data-page]');
-      if (!el) return { error: 'No data-page element' };
-      const pageData = JSON.parse(el.getAttribute('data-page'));
-      const gAAD = pageData?.props?.getAddAdvertiseData;
-      if (!gAAD) return { error: 'No getAddAdvertiseData', propsKeys: Object.keys(pageData?.props || {}) };
+  try {
+    // Reload add_advertise page to get fresh initial data
+    console.log("[Mzad] getGroupsData: navigating to add_advertise...");
+    await _page.goto("https://www.mzadqatar.com/en/add_advertise", { waitUntil: "networkidle2", timeout: 30000 });
+    const pageUrl = _page.url();
+    console.log("[Mzad] getGroupsData: page URL:", pageUrl);
+    
+    if (pageUrl.includes("/login")) return { error: "Redirected to login - session expired", url: pageUrl };
+    
+    const result = await _page.evaluate(() => {
+      const el = document.querySelector("[data-page]");
+      if (!el) return { error: "no data-page", bodyText: document.body?.innerText?.substring(0, 500) };
+      const raw = el.getAttribute("data-page");
+      if (!raw) return { error: "empty data-page" };
+      const pd = JSON.parse(raw);
+      const p = pd.props || {};
+      const gAAD = p.getAddAdvertiseData;
       
-      const apiData = gAAD.apiData;
-      if (!apiData) return { error: 'No apiData', gAADKeys: Object.keys(gAAD) };
-      
-      // Extract groups with products
-      const groups = (apiData.groups || []).map(g => ({
-        groupName: g.groupName,
-        clicktype: g.clicktype,
-        products: (g.products || []).map(p => ({
-          productId: p.productId,
-          productName: p.productName,
-          isAllowToAdd: p.isAllowToAdd,
-          packageTag: p.packageTag || null,
-          adsCount: p.adsCount,
-          adsLimit: p.adsLimit,
-          remainingAds: p.remainingAds,
-        }))
-      }));
-      
-      // Find category 8494
-      const allProducts = apiData.groups.flatMap(g => g.products || []);
-      const cat8494 = allProducts.find(p => String(p.productId) === '8494');
-      
-      return {
-        totalGroups: groups.length,
-        totalProducts: allProducts.length,
-        groups: groups,
-        cat8494: cat8494 || 'NOT FOUND',
-        apiDataKeys: Object.keys(apiData),
-        isLoggedIn: pageData?.props?.isLoggedIn,
-        classifiedUserData: pageData?.props?.classifiedUserData ? {
-          keys: Object.keys(pageData.props.classifiedUserData),
-          userId: pageData.props.classifiedUserData.userId,
-          userName: pageData.props.classifiedUserData.userName,
-          phone: pageData.props.classifiedUserData.mobileNumber,
-        } : null,
-        adsSelectedData: gAAD.adsSelectedData,
-        prevData: gAAD.prevData,
-        step: gAAD.step,
+      // Basic page info
+      const info = {
+        component: pd.component,
+        url: pd.url,
+        isLoggedIn: p.isLoggedIn,
+        propsKeys: Object.keys(p),
+        userData: p.classifiedUserData ? { id: p.classifiedUserData.userId, name: p.classifiedUserData.userName, phone: p.classifiedUserData.mobileNumber } : null,
       };
-    } catch(e) {
-      return { error: e.message };
-    }
-  });
-  
-  return data;
+      
+      if (!gAAD) return { ...info, error: "no getAddAdvertiseData" };
+      
+      info.gAADKeys = Object.keys(gAAD);
+      info.step = gAAD.step;
+      info.isEdit = gAAD.isEdit;
+      info.isCompleted = gAAD.isCompleted;
+      
+      if (gAAD.apiData) {
+        info.apiDataKeys = Object.keys(gAAD.apiData);
+        if (gAAD.apiData.groups) {
+          const grps = gAAD.apiData.groups;
+          info.totalGroups = grps.length;
+          info.groups = grps.map(g => ({
+            name: g.groupName,
+            click: g.clicktype,
+            count: (g.products || []).length,
+            products: (g.products || []).map(p => ({
+              id: p.productId,
+              name: p.productName,
+              allow: p.isAllowToAdd,
+              pkg: p.packageTag || null,
+              ads: p.adsCount,
+              limit: p.adsLimit,
+            }))
+          }));
+          const all = grps.flatMap(g => g.products || []);
+          info.totalProducts = all.length;
+          info.cat8494 = all.find(p => String(p.productId) === "8494") || "NOT_FOUND";
+        }
+      }
+      
+      if (gAAD.adsSelectedData) info.adsSelectedData = gAAD.adsSelectedData;
+      if (gAAD.prevData) info.prevData = gAAD.prevData;
+      
+      return info;
+    });
+    
+    console.log("[Mzad] getGroupsData result:", JSON.stringify(result).substring(0, 2000));
+    return result;
+  } catch(e) {
+    return { error: "getGroupsData exception: " + e.message };
+  }
 }
 
+module.exports = { getSession, postAd, closeBrowser, getGroupsData };
 module.exports = { getSession, postAd, closeBrowser, getGroupsData };
  
