@@ -839,9 +839,11 @@ app.get('/delete-all-ads', async (req, res) => {
         const el = document.querySelector('[data-page]');
         if (!el) return { error: 'no data-page' };
         const pd = JSON.parse(el.getAttribute('data-page'));
-        const myProds = pd.props?.myProductsData?.data || pd.props?.getMyProductsData?.data || [];
+        const propsKeys = Object.keys(pd.props || {});
+        let myProds = []; let foundKey = 'none';
+        for (const key of propsKeys) { const val = pd.props[key]; if (val && typeof val === 'object') { if (Array.isArray(val.data) && val.data.length > 0) { myProds = val.data; foundKey = key + '.data'; break; } if (Array.isArray(val) && val.length > 0 && val[0] && val[0].productId) { myProds = val; foundKey = key; break; } } }
         return {
-          component: pd.component,
+          component: pd.component, propsKeys, foundKey,
           totalAds: myProds.length,
           ads: myProds.map(a => ({
             id: a.productId || a.id,
@@ -849,13 +851,14 @@ app.get('/delete-all-ads', async (req, res) => {
             price: a.productPrice || '',
             status: a.status,
             slug: a.productSlug || a.slug || '',
-          }))
+          })),
+          rawPropsPreview: JSON.stringify(pd.props).substring(0, 2000)
         };
       } catch(e) { return { error: e.message }; }
     });
 
     if (adsData.error) return res.json({ error: adsData.error });
-    if (!adsData.ads || adsData.ads.length === 0) return res.json({ status: 'no_ads', message: 'No ads found to delete' });
+    if (!adsData.ads || adsData.ads.length === 0) return res.json({ status: 'no_ads', debug: { component: adsData.component, propsKeys: adsData.propsKeys, foundKey: adsData.foundKey, rawPreview: adsData.rawPropsPreview } });
 
     console.log('[delete-all-ads] Found', adsData.ads.length, 'ads:', JSON.stringify(adsData.ads));
 
@@ -910,6 +913,9 @@ app.get('/delete-ad', async (req, res) => {
     if (!page) return res.status(500).json({ error: 'No browser page' });
     const adId = req.query.id;
     if (!adId) return res.status(400).json({ error: 'Missing ?id=XXXXX parameter' });
+
+    // Navigate to mzadqatar.com so cookies and fetch work
+    await page.goto('https://www.mzadqatar.com/en/user/profile/myads', { waitUntil: 'networkidle2', timeout: 30000 });
 
     const cookies = await page.cookies();
     let xsrf = '';
