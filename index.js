@@ -1539,7 +1539,61 @@ app.get('/fresh-post', async (req, res) => {
 });
 
 
-app.listen(PORT, () => {
+
+// ── CHECK PACKAGES ──
+app.get('/check-packages', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No Puppeteer page' });
+    
+    // Navigate to ads packages page
+    await page.goto('https://mzadqatar.com/en/user/profile/packages', { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 2000));
+    
+    const pkgData = await page.evaluate(() => {
+      const appEl = document.getElementById('app');
+      if (!appEl || !appEl.dataset.page) return { error: 'no app data' };
+      const pd = JSON.parse(appEl.dataset.page);
+      return {
+        component: pd.component,
+        url: pd.url,
+        propsKeys: Object.keys(pd.props || {}),
+        propsPreview: JSON.stringify(pd.props).substring(0, 3000)
+      };
+    });
+    
+    // Also get page text
+    const pageText = await page.evaluate(() => {
+      return document.body?.innerText?.substring(0, 2000) || '';
+    });
+    
+    // Also try account overview
+    await page.goto('https://mzadqatar.com/en/user/profile/account-overview', { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 2000));
+    
+    const acctData = await page.evaluate(() => {
+      const appEl = document.getElementById('app');
+      if (!appEl || !appEl.dataset.page) return { error: 'no app data' };
+      const pd = JSON.parse(appEl.dataset.page);
+      return {
+        component: pd.component,
+        propsKeys: Object.keys(pd.props || {}),
+        propsPreview: JSON.stringify(pd.props).substring(0, 3000)
+      };
+    });
+    
+    const acctText = await page.evaluate(() => {
+      return document.body?.innerText?.substring(0, 2000) || '';
+    });
+    
+    res.json({ pkgData, pageText: pageText.substring(0, 1000), acctData, acctText: acctText.substring(0, 1000) });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+\napp.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
   // Load config (Twilio creds) from Config sheet
