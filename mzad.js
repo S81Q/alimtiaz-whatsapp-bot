@@ -462,6 +462,31 @@ async function getSession() {
   } else {
     console.log('[Mzad] No stored session, logging in...');
   }
+  // Try browser cookies before re-login
+  if (_page) {
+    try {
+      console.log('[Mzad] Checking browser cookies for valid session...');
+      const cookies = await _page.cookies('https://mzadqatar.com');
+      let bSession = '', bXsrf = '';
+      for (const c of cookies) {
+        if (c.name === 'mzadqatar_session') bSession = c.value;
+        if (c.name === 'XSRF-TOKEN') bXsrf = c.value;
+      }
+      if (bSession && bXsrf) {
+        const bValid = await isSessionValid(bSession, bXsrf);
+        if (bValid) {
+          console.log('[Mzad] Browser session is valid! Updating env.');
+          process.env.MZAD_SESSION = bSession;
+          process.env.MZAD_XSRF_TOKEN = bXsrf;
+          return { session: bSession, xsrf: bXsrf, csrfToken: decodedXsrf(bXsrf) };
+        }
+        console.log('[Mzad] Browser session also expired');
+      }
+    } catch (e) {
+      console.warn('[Mzad] Browser cookie check failed:', e.message);
+    }
+  }
+  console.log('[Mzad] Re-logging in via OTP...');
   return await loginWithOtp();
 }
 
@@ -606,7 +631,9 @@ async function postAd(property, sessionData) {
 
   console.log('[Mzad] Step 1 response status:', step1Res.status);
   if (step1Res.cookies['mzadqatar_session']) session = step1Res.cookies['mzadqatar_session'];
+    if (step1Res.cookies['mzadqatar_session']) process.env.MZAD_SESSION = session;
   if (step1Res.cookies['XSRF-TOKEN']) xsrf = step1Res.cookies['XSRF-TOKEN'];
+    if (step1Res.cookies['XSRF-TOKEN']) process.env.MZAD_XSRF_TOKEN = xsrf;
 
   if (step1Res.status === 301 || step1Res.status === 302) {
     throw new Error(`Mzad Step 1 redirected to login: status=${step1Res.status}`);
@@ -748,7 +775,9 @@ async function postAd(property, sessionData) {
 
   console.log('[Mzad] Step 2 response status:', step2Res.status);
   if (step2Res.cookies['mzadqatar_session']) session = step2Res.cookies['mzadqatar_session'];
+    if (step2Res.cookies['mzadqatar_session']) process.env.MZAD_SESSION = session;
   if (step2Res.cookies['XSRF-TOKEN']) xsrf = step2Res.cookies['XSRF-TOKEN'];
+    if (step2Res.cookies['XSRF-TOKEN']) process.env.MZAD_XSRF_TOKEN = xsrf;
 
   if (step2Res.status === 301 || step2Res.status === 302) {
     throw new Error(`Mzad Step 2 redirected: status=${step2Res.status}`);
