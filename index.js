@@ -1593,6 +1593,70 @@ app.get('/check-packages', async (req, res) => {
   }
 });
 
+\n
+// ── TRY DIFFERENT CATEGORY ──
+app.get('/try-category', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No Puppeteer page' });
+    const catId = parseInt(req.query.cat || '9');
+    
+    // Navigate to add_advertise
+    await page.goto('https://mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 1000));
+    
+    // Step 1 with given category
+    const step1 = await page.evaluate(async (cid) => {
+      try {
+        const xsrf = decodeURIComponent(document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='))?.split('=').slice(1).join('=') || '');
+        const resp = await fetch('/en/add_advertise', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Inertia': 'true', 'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html, application/xhtml+xml' },
+          body: JSON.stringify({ step: 1, step1Data: { categoryId: cid, lang: 'aren', mzadyUserNumber: '' } })
+        });
+        const d = await resp.json();
+        return { status: resp.status, step: d.props?.getAddAdvertiseData?.step, apiKeys: d.props?.getAddAdvertiseData?.apiData ? Object.keys(d.props.getAddAdvertiseData.apiData) : null, freeProductId: d.props?.getAddAdvertiseData?.apiData?.freeProductId };
+      } catch(e) { return { error: e.message }; }
+    }, catId);
+    
+    // If step1 went to step 2 (no subcategory needed), try step 3
+    // For category 9 (Others), step1 goes directly to step3-ready
+    const step3Test = await page.evaluate(async (cid) => {
+      try {
+        const xsrf = decodeURIComponent(document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='))?.split('=').slice(1).join('=') || '');
+        
+        // Build minimal step3 form data
+        const fd = new FormData();
+        fd.append('step', '3');
+        fd.append('step1Data[categoryId]', String(cid));
+        fd.append('step1Data[lang]', 'aren');
+        fd.append('step1Data[mzadyUserNumber]', '');
+        fd.append('step3Data[productPrice]', '100');
+        fd.append('step3Data[productNameEnglish]', 'Test post');
+        fd.append('step3Data[productDescriptionEnglish]', 'Test posting to check free ads limit');
+        fd.append('step3Data[productNameArabic]', 'اختبار');
+        fd.append('step3Data[productDescriptionArabic]', 'اختبار نشر الاعلان');
+        fd.append('step3Data[autoRenew]', '0');
+        fd.append('step3Data[agree_commission]', '1');
+        
+        const resp = await fetch('/en/add_advertise', {
+          method: 'POST',
+          headers: { 'X-Inertia': 'true', 'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html, application/xhtml+xml' },
+          body: fd
+        });
+        const d = await resp.json();
+        const apiData = d.props?.getAddAdvertiseData?.apiData || {};
+        return { status: resp.status, didNotSaved: apiData.didNotSaved, message: apiData.statusMsg || apiData.message, errorType: apiData.errorType, step: d.props?.getAddAdvertiseData?.step };
+      } catch(e) { return { error: e.message }; }
+    }, catId);
+    
+    res.json({ catId, step1, step3Test });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 \napp.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
