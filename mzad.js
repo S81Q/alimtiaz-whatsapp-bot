@@ -843,84 +843,116 @@ async function postAd(property, sessionData) {
 
   let step3Res;
   let currencyId = 1; // default fallback (hoisted for resubmit access)
-  // ── STEP 3: Pure axios FormData (no browser fetch) ──
+  // ── STEP 3: Browser FormData (same session context as steps 1-2) ──
   {
-    const form = new FormData();
-    form.append('step', '3');
-
-    // step1Data (server prevData or fallback)
     const s1 = serverStep1Data || { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' };
-    for (const [k, v] of Object.entries(s1)) {
-      form.append('step1Data[' + k + ']', v == null ? '' : String(v));
-    }
-
-    // step2Data (server prevData or fallback)
     const s2 = serverStep2Data || {};
-    for (const [k, v] of Object.entries(s2)) {
-      if (v == null) {
-        form.append('step2Data[' + k + ']', '');
-      } else if (typeof v === 'object' && !Array.isArray(v)) {
-        for (const [k2, v2] of Object.entries(v)) {
-          form.append('step2Data[' + k + '][' + k2 + ']', v2 == null ? '' : String(v2));
-        }
-      } else {
-        form.append('step2Data[' + k + ']', String(v));
-      }
-    }
+    const csrf = decodedXsrf(xsrf);
+    const ver = _inertiaVersion || '';
+    console.log('[Mzad] Step 3: s1Data:', JSON.stringify(s1));
+    console.log('[Mzad] Step 3: s2Data:', JSON.stringify(s2).substring(0, 500));
+    console.log('[Mzad] Step 3: productId:', freeProductId, 'price:', price, 'browser:', !!_page);
 
-    // step3Data
-    form.append('step3Data[productPrice]', String(price));
-    form.append('step3Data[productNameEnglish]', titleEn);
-    form.append('step3Data[productDescriptionEnglish]', desc);
-    form.append('step3Data[productNameArabic]', titleAr);
-    form.append('step3Data[productDescriptionArabic]', desc);
-    form.append('step3Data[productNameArEn]', '');
-    form.append('step3Data[productDescriptionArEn]', '');
-    form.append('step3Data[autoRenew]', '0');
-    form.append('step3Data[agree_commission]', '1');
-    form.append('step3Data[currencyId]', '1');
-    form.append('step3Data[isResetImages]', '0');
-    form.append('step3Data[productId]', freeProductId || '');
-
-    // Image
-    form.append('step3Data[images][0][id]', '0');
-    form.append('step3Data[images][0][type]', 'image/jpeg');
-    form.append('step3Data[images][0][url]', '');
-    form.append('step3Data[images][0][tempFile]', fs.createReadStream(imagePath), {
-      filename: 'property.jpg', contentType: 'image/jpeg',
-    });
-
-    console.log('[Mzad] Step 3 axios: s1Data:', JSON.stringify(s1));
-    console.log('[Mzad] Step 3 axios: s2Data:', JSON.stringify(s2).substring(0, 500));
-    console.log('[Mzad] Step 3 axios: productId:', freeProductId, 'price:', price);
-
-    // Get CF cookies from browser if available
-    let cfCookieStr = '';
     if (_page) {
       try {
-        const bc = await _page.cookies('https://mzadqatar.com');
-        const cfc = bc.filter(c => c.name.startsWith('cf_') || c.name.startsWith('__cf'));
-        if (cfc.length > 0) cfCookieStr = '; ' + cfc.map(c => c.name + '=' + c.value).join('; ');
-      } catch(e) {}
-    }
+        await _page.setCookie(
+          { name: 'mzadqatar_session', value: session, domain: 'mzadqatar.com', path: '/', httpOnly: true },
+          { name: 'XSRF-TOKEN', value: xsrf, domain: 'mzadqatar.com', path: '/' }
+        );
+      } catch (e) { console.warn('[Mzad] Cookie sync error:', e.message); }
 
-    const axiosRes = await axios.post(BASE_URL + "/en/add_advertise", form, {
-      headers: {
-        ...form.getHeaders(),
-        'X-Requested-With': 'XMLHttpRequest',
-        'X-Inertia': 'true',
-        'X-Inertia-Version': _inertiaVersion || '',
-        'X-XSRF-TOKEN': decodedXsrf(xsrf),
-        'Cookie': buildCookieStr(session, xsrf) + cfCookieStr,
-        'Origin': BASE_URL,
-        'Referer': BASE_URL + '/en/add_advertise',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
-      maxRedirects: 0, validateStatus: s => s < 500, maxContentLength: 50 * 1024 * 1024,
-    });
-    console.log('[Mzad] Step 3 axios status:', axiosRes.status);
-    console.log('[Mzad] Step 3 axios data:', JSON.stringify(axiosRes.data).substring(0, 2000));
-    step3Res = axiosRes;
+      step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer, s1Data, s2Data, prodId) => {
+        const byteChars = atob(imgB64);
+        const byteArr = new Uint8Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([byteArr], { type: 'image/jpeg' });
+        function appendFD(fd, key, value) {
+          if (value === null || value === undefined) fd.append(key, '');
+          else if (value instanceof Blob || value instanceof File) fd.append(key, value, 'property.jpg');
+          else if (typeof value === 'object' && !Array.isArray(value)) {
+            for (const [k, v] of Object.entries(value)) appendFD(fd, key + '[' + k + ']', v);
+          } else if (Array.isArray(value)) {
+            if (value.length === 0) fd.append(key, '');
+            else for (let i = 0; i < value.length; i++) appendFD(fd, key + '[' + i + ']', value[i]);
+          } else fd.append(key, String(value));
+        }
+        const fd = new FormData();
+        fd.append('step', '3');
+        appendFD(fd, 'step1Data', s1Data || {});
+        appendFD(fd, 'step2Data', s2Data || {});
+        appendFD(fd, 'step3Data', {
+          productPrice: String(p),
+          productNameEnglish: tEn, productDescriptionEnglish: dEn,
+          productNameArabic: tAr, productDescriptionArabic: dAr,
+          productNameArEn: '', productDescriptionArEn: '',
+          autoRenew: '0', agree_commission: '1', currencyId: '1',
+          isResetImages: '0', productId: prodId || '',
+          images: [{ id: '0', type: 'image/jpeg', url: '', tempFile: blob }],
+        });
+        const entries = [];
+        for (const [k, v] of fd.entries()) entries.push(k + '=' + (v instanceof Blob ? '[Blob]' : String(v).substring(0, 60)));
+        console.log('[Step3-FD]', entries.length, 'entries:', entries.slice(0, 20).join(' | '));
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Accept': 'text/html, application/xhtml+xml',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-Inertia': 'true',
+            'X-Inertia-Version': inertiaVer,
+            'X-XSRF-TOKEN': csrfToken,
+          },
+          body: fd, credentials: "include",
+        });
+        const text = await res.text();
+        let json = null;
+        try { json = JSON.parse(text); } catch {}
+        let apiSafe = null;
+        if (json && json.props && json.props.getAddAdvertiseData && json.props.getAddAdvertiseData.apiData) {
+          const ad = json.props.getAddAdvertiseData.apiData;
+          apiSafe = { keys: Object.keys(ad), didNotSaved: ad.didNotSaved, message: ad.message || ad.statusMsg, status: ad.status };
+        }
+        return {
+          status: res.status,
+          data: json ? {
+            component: json.component, url: json.url, errors: json.props ? json.props.errors : null,
+            getAddAdvertiseData: (json.props && json.props.getAddAdvertiseData) ? {
+              step: json.props.getAddAdvertiseData.prevData ? json.props.getAddAdvertiseData.prevData.step : null,
+              apiData: apiSafe,
+            } : null,
+          } : text.substring(0, 1500),
+          isJson: !!json,
+        };
+      }, BASE_URL + '/en/add_advertise', price, titleEn, desc, titleAr, desc, imgBase64,
+         csrf, ver, s1, s2, freeProductId || '');
+      step3Res = { status: step3Res.status, data: step3Res.data };
+    } else {
+      // No browser: axios FormData fallback
+      const form = new FormData();
+      form.append('step', '3');
+      for (const [k, v] of Object.entries(s1)) form.append('step1Data[' + k + ']', v == null ? '' : String(v));
+      for (const [k, v] of Object.entries(s2)) form.append('step2Data[' + k + ']', v == null ? '' : String(v));
+      form.append('step3Data[productPrice]', String(price));
+      form.append('step3Data[productNameEnglish]', titleEn);
+      form.append('step3Data[productDescriptionEnglish]', desc);
+      form.append('step3Data[productNameArabic]', titleAr);
+      form.append('step3Data[productDescriptionArabic]', desc);
+      form.append('step3Data[autoRenew]', '0');
+      form.append('step3Data[agree_commission]', '1');
+      form.append('step3Data[currencyId]', '1');
+      form.append('step3Data[isResetImages]', '0');
+      form.append('step3Data[productId]', freeProductId || '');
+      form.append('step3Data[images][0][id]', '0');
+      form.append('step3Data[images][0][type]', 'image/jpeg');
+      form.append('step3Data[images][0][url]', '');
+      form.append('step3Data[images][0][tempFile]', fs.createReadStream(imagePath), { filename: 'property.jpg', contentType: 'image/jpeg' });
+      const axiosRes = await axios.post(BASE_URL + '/en/add_advertise', form, {
+        headers: { ...form.getHeaders(), 'X-Requested-With': 'XMLHttpRequest', 'X-Inertia': 'true', 'X-Inertia-Version': ver, 'X-XSRF-TOKEN': csrf, 'Cookie': buildCookieStr(session, xsrf), 'Origin': BASE_URL, 'Referer': BASE_URL + '/en/add_advertise' },
+        maxRedirects: 0, validateStatus: s => s <= 500, maxContentLength: 50 * 1024 * 1024,
+      });
+      step3Res = axiosRes;
+    }
+    console.log('[Mzad] Step 3 status:', step3Res.status);
+    console.log('[Mzad] Step 3 data:', JSON.stringify(step3Res.data).substring(0, 2000));
   }
 
   console.log('[Mzad] Step 3 response status:', step3Res.status);
