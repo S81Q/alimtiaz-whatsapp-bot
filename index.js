@@ -1593,7 +1593,7 @@ app.get('/check-packages', async (req, res) => {
   }
 });
 
-\n
+
 // ── TRY DIFFERENT CATEGORY ──
 app.get('/try-category', async (req, res) => {
   try {
@@ -1657,7 +1657,7 @@ app.get('/try-category', async (req, res) => {
   }
 });
 
-\n
+
 // ── MEGA DIAGNOSTIC + POST VIA UI ──
 app.get('/mega-post', async (req, res) => {
   try {
@@ -1776,7 +1776,7 @@ app.get('/mega-post', async (req, res) => {
   }
 });
 
-\napp.listen(PORT, () => {
+app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
   // Load config (Twilio creds) from Config sheet
