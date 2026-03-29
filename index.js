@@ -1657,6 +1657,125 @@ app.get('/try-category', async (req, res) => {
   }
 });
 
+\n
+// ── MEGA DIAGNOSTIC + POST VIA UI ──
+app.get('/mega-post', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No Puppeteer page' });
+    const unit = req.query.unit || 'P49';
+    const results = {};
+
+    // 1. Check account overview
+    try {
+      await page.goto('https://mzadqatar.com/en/user/profile/account-overview', { waitUntil: 'networkidle2', timeout: 30000 });
+      await new Promise(r => setTimeout(r, 1500));
+      results.accountText = await page.evaluate(() => document.body?.innerText?.substring(0, 1500) || '');
+      results.accountData = await page.evaluate(() => {
+        const el = document.getElementById('app');
+        if (!el) return null;
+        const pd = JSON.parse(el.dataset.page);
+        return { component: pd.component, propsKeys: Object.keys(pd.props || {}), preview: JSON.stringify(pd.props).substring(0, 2000) };
+      });
+    } catch(e) { results.accountError = e.message; }
+
+    // 2. Check packages page
+    try {
+      await page.goto('https://mzadqatar.com/en/user/profile/packages', { waitUntil: 'networkidle2', timeout: 30000 });
+      await new Promise(r => setTimeout(r, 1500));
+      results.packagesText = await page.evaluate(() => document.body?.innerText?.substring(0, 1500) || '');
+    } catch(e) { results.packagesError = e.message; }
+
+    // 3. Navigate to add_advertise page via UI
+    try {
+      await page.goto('https://mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+      await new Promise(r => setTimeout(r, 2000));
+      
+      // Get the page state and look for category 9 (Others) button
+      results.addPageText = await page.evaluate(() => document.body?.innerText?.substring(0, 1000) || '');
+      
+      // Click on "Others" category in the UI
+      const clickedCat = await page.evaluate(() => {
+        // Find all category links/buttons
+        const allEls = document.querySelectorAll('a, button, div[class*="category"], div[class*="product"], [data-category-id]');
+        for (const el of allEls) {
+          const text = (el.textContent || '').trim();
+          if (text === 'Others' || text.includes('Others') || el.getAttribute('data-category-id') === '9') {
+            el.click();
+            return { clicked: true, text: text.substring(0, 50), tag: el.tagName };
+          }
+        }
+        return { clicked: false, count: allEls.length };
+      });
+      results.clickedCategory = clickedCat;
+      await new Promise(r => setTimeout(r, 2000));
+      
+      // Check new page state after category click
+      results.afterCatClick = await page.evaluate(() => {
+        const el = document.getElementById('app');
+        if (!el) return null;
+        const pd = JSON.parse(el.dataset.page);
+        const gAAD = pd.props?.getAddAdvertiseData || {};
+        return { step: gAAD.step, apiKeys: gAAD.apiData ? Object.keys(gAAD.apiData) : null, freeProductId: gAAD.apiData?.freeProductId, prevStep: gAAD.prevData?.step };
+      });
+      
+      // 4. Try posting directly via the Inertia form with an image
+      const postResult = await page.evaluate(async () => {
+        try {
+          const xsrf = decodeURIComponent(document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='))?.split('=').slice(1).join('=') || '');
+          const inertiaVer = document.querySelector('meta[name="inertia-version"]')?.content || '';
+          
+          // Create a tiny 1x1 pixel JPEG
+          const canvas = document.createElement('canvas');
+          canvas.width = 100; canvas.height = 100;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#cccccc';
+          ctx.fillRect(0, 0, 100, 100);
+          ctx.fillStyle = '#333333';
+          ctx.font = '12px Arial';
+          ctx.fillText('For Rent', 10, 50);
+          
+          const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+          const file = new File([blob], 'property.jpg', { type: 'image/jpeg' });
+          
+          const fd = new FormData();
+          fd.append('step', '3');
+          fd.append('step1Data[categoryId]', '9');
+          fd.append('step1Data[lang]', 'aren');
+          fd.append('step1Data[mzadyUserNumber]', '');
+          fd.append('step3Data[productPrice]', '100');
+          fd.append('step3Data[productNameEnglish]', 'Room for rent Doha');
+          fd.append('step3Data[productDescriptionEnglish]', 'Vacant room available for rent in Doha Qatar. Contact for details.');
+          fd.append('step3Data[productNameArabic]', 'غرفة للإيجار الدوحة');
+          fd.append('step3Data[productDescriptionArabic]', 'غرفة شاغرة للإيجار في الدوحة قطر. تواصل للتفاصيل.');
+          fd.append('step3Data[autoRenew]', '0');
+          fd.append('step3Data[agree_commission]', '1');
+          fd.append('step3Data[images][0][id]', '0');
+          fd.append('step3Data[images][0][type]', 'image/jpeg');
+          fd.append('step3Data[images][0][url]', '');
+          fd.append('step3Data[images][0][tempFile]', file, 'property.jpg');
+          
+          const resp = await fetch('/en/add_advertise', {
+            method: 'POST',
+            headers: { 'X-Inertia': 'true', 'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html, application/xhtml+xml', 'X-Inertia-Version': inertiaVer },
+            body: fd
+          });
+          const d = await resp.json();
+          const apiData = d.props?.getAddAdvertiseData?.apiData || {};
+          return { status: resp.status, didNotSaved: apiData.didNotSaved, message: apiData.statusMsg || apiData.message, errorType: apiData.errorType, step: d.props?.getAddAdvertiseData?.step, component: d.component, url: d.url, allApiKeys: Object.keys(apiData) };
+        } catch(e) { return { error: e.message }; }
+      });
+      results.postResult = postResult;
+      
+    } catch(e) { results.addError = e.message; }
+
+    res.json(results);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 \napp.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
