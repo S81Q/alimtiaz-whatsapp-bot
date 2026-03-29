@@ -1776,6 +1776,17 @@ app.get('/mega-post', async (req, res) => {
   }
 });
 
+
+// Inject session cookies from outside (e.g., from Chrome browser)
+app.get('/set-session', (req, res) => {
+  const session = req.query.session;
+  const xsrf = req.query.xsrf;
+  if (!session || !xsrf) return res.json({ error: 'Missing ?session=...&xsrf=... params' });
+  process.env.MZAD_SESSION = session;
+  process.env.MZAD_XSRF_TOKEN = xsrf;
+  res.json({ success: true, message: 'Session injected', sessionLen: session.length, xsrfLen: xsrf.length });
+});
+
 app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
