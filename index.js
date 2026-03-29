@@ -1466,6 +1466,79 @@ app.get('/click-delete-all', async (req, res) => {
   }
 });
 
+
+// ── FRESH POST (navigate home first to clear cache) ──
+app.get('/fresh-post', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No Puppeteer page' });
+    const unit = req.query.unit || 'P49';
+    
+    // First navigate to homepage to reset any session cache
+    await page.goto('https://mzadqatar.com/en', { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 2000));
+    
+    // Check if logged in by looking at page
+    const isLoggedIn = await page.evaluate(() => {
+      const appEl = document.getElementById('app');
+      if (!appEl || !appEl.dataset.page) return false;
+      const pd = JSON.parse(appEl.dataset.page);
+      return pd.props?.isLoggedIn || false;
+    });
+    
+    if (!isLoggedIn) return res.status(401).json({ error: 'Not logged in' });
+    
+    // Navigate to add_advertise
+    await page.goto('https://mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 2000));
+    
+    // Extract page state
+    const pageState = await page.evaluate(() => {
+      const appEl = document.getElementById('app');
+      if (!appEl || !appEl.dataset.page) return { error: 'no app data' };
+      const pd = JSON.parse(appEl.dataset.page);
+      return {
+        component: pd.component,
+        url: pd.url,
+        propsKeys: Object.keys(pd.props || {}),
+        errors: pd.props?.errors,
+        isLoggedIn: pd.props?.isLoggedIn,
+        step: pd.props?.getAddAdvertiseData?.step,
+        apiData: pd.props?.getAddAdvertiseData?.apiData ? Object.keys(pd.props.getAddAdvertiseData.apiData) : null
+      };
+    });
+    
+    // Now try step1 with category 9 (Others - free)
+    const step1Res = await page.evaluate(async () => {
+      try {
+        const resp = await fetch('/en/add_advertise', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Inertia': 'true',
+            'X-Inertia-Version': document.querySelector('meta[name="inertia-version"]')?.content || '',
+            'X-XSRF-TOKEN': decodeURIComponent(document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='))?.split('=').slice(1).join('=') || ''),
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'text/html, application/xhtml+xml'
+          },
+          body: JSON.stringify({
+            step: 1,
+            step1Data: { categoryId: 9, lang: 'aren', mzadyUserNumber: '' }
+          })
+        });
+        const data = await resp.json();
+        return { status: resp.status, component: data.component, step: data.props?.getAddAdvertiseData?.step, apiDataKeys: data.props?.getAddAdvertiseData?.apiData ? Object.keys(data.props.getAddAdvertiseData.apiData) : null, freeProductId: data.props?.getAddAdvertiseData?.apiData?.freeProductId };
+      } catch(e) { return { error: e.message }; }
+    });
+    
+    res.json({ isLoggedIn, pageState, step1Res, unit });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
+
 app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
