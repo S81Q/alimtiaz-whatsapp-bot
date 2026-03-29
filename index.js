@@ -1195,7 +1195,7 @@ app.get('/post-vacant', async (req, res) => {
     if (!prop) return res.status(400).json({ error: 'Unknown unit: ' + unit, available: Object.keys(vacantProperties) });
 
     // Override to category 9 (Others - free category)
-    prop._overrideCategory = 9;
+    // prop._overrideCategory = 9; // disabled - try real category first
 
     console.log('[post-vacant] Posting unit', unit, ':', JSON.stringify(prop));
 

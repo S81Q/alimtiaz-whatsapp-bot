@@ -994,9 +994,9 @@ async function postAd(property, sessionData) {
   if (s3ApiData?.didNotSaved) {
     console.error("[Mzad] Step 3 failed: didNotSaved =", s3ApiData.didNotSaved, "message:", s3ApiData.message);
     // FALLBACK: If package error, retry with Others (cat 9)
-    if (s3ApiData.message && s3ApiData.message.includes("subscribed to packages") && categoryId !== 9) {
-      console.log("[Mzad] Package required for cat", categoryId, "- fallback to Others (cat 9)");
-      const fallbackProp = { ...property, _overrideCategory: 9 };
+    if (s3ApiData.message && (s3ApiData.message.includes("subscribed to packages") || s3ApiData.message.includes("Free ads limit")) && categoryId !== 8) {
+      console.log("[Mzad] Error for cat", categoryId, ":", s3ApiData.message, "- fallback to next cat");
+      const fallbackProp = { ...property, _overrideCategory: property._triedCat8 ? 200 : 8 }; fallbackProp._triedCat8 = true;
       return postAd(fallbackProp, { session, xsrf });
     }
     return {
