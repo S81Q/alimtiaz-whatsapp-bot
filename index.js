@@ -1363,6 +1363,109 @@ app.get('/delete-ad-ui-click', async (req, res) => {
 });
 
 
+
+
+// ── CLICK DELETE ALL ADS ──
+app.get('/click-delete-all', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No Puppeteer page' });
+    
+    await page.goto('https://mzadqatar.com/en/user/profile/myads', { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 2000));
+    
+    // Find all delete buttons (with deletead.svg icon, not share.svg)
+    const deleteButtons = await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button.delete');
+      const deleteOnes = [];
+      buttons.forEach((btn, i) => {
+        const img = btn.querySelector('img');
+        if (img && img.src && img.src.includes('deletead')) {
+          deleteOnes.push({ index: i, outerHTML: btn.outerHTML.substring(0, 200) });
+        }
+      });
+      return deleteOnes;
+    });
+    
+    const results = [];
+    
+    for (let i = 0; i < deleteButtons.length; i++) {
+      try {
+        // Re-find buttons each time since page may re-render
+        const clicked = await page.evaluate((idx) => {
+          const buttons = document.querySelectorAll('button.delete');
+          let deleteIdx = 0;
+          for (let j = 0; j < buttons.length; j++) {
+            const img = buttons[j].querySelector('img');
+            if (img && img.src && img.src.includes('deletead')) {
+              if (deleteIdx === idx) {
+                buttons[j].click();
+                return { clicked: true, buttonIndex: j };
+              }
+              deleteIdx++;
+            }
+          }
+          return { clicked: false };
+        }, i);
+        
+        results.push({ step: 'clicked_delete_' + i, ...clicked });
+        await new Promise(r => setTimeout(r, 1500));
+        
+        // Look for confirmation dialog and click the confirm/delete button
+        const confirmed = await page.evaluate(() => {
+          // Look for modal/dialog with delete confirmation
+          const allButtons = document.querySelectorAll('button, a');
+          for (const btn of allButtons) {
+            const text = (btn.textContent || '').trim().toLowerCase();
+            if (text === 'delete' || text === 'حذف' || text === 'confirm' || text === 'yes') {
+              // Check if it's in a modal/dialog context
+              const parent = btn.closest('.modal, .dialog, .popup, .swal2-container, [class*="modal"], [class*="dialog"], [role="dialog"]');
+              if (parent || btn.classList.contains('swal2-confirm') || btn.classList.contains('confirm')) {
+                btn.click();
+                return { confirmed: true, text: btn.textContent.trim(), tag: btn.tagName };
+              }
+            }
+          }
+          // Try swal2 specific buttons
+          const swalConfirm = document.querySelector('.swal2-confirm, .swal2-actions button:first-child');
+          if (swalConfirm) {
+            swalConfirm.click();
+            return { confirmed: true, text: swalConfirm.textContent.trim(), method: 'swal2' };
+          }
+          // Try any visible delete/confirm button
+          for (const btn of allButtons) {
+            const text = (btn.textContent || '').trim().toLowerCase();
+            if ((text === 'delete' || text === 'حذف') && btn.offsetParent !== null) {
+              btn.click();
+              return { confirmed: true, text: btn.textContent.trim(), method: 'visible_delete' };
+            }
+          }
+          return { confirmed: false, visibleButtons: Array.from(allButtons).filter(b => b.offsetParent !== null).map(b => b.textContent.trim().substring(0, 50)).slice(0, 20) };
+        });
+        
+        results.push({ step: 'confirm_' + i, ...confirmed });
+        await new Promise(r => setTimeout(r, 2000));
+        
+      } catch(e) {
+        results.push({ step: 'error_' + i, error: e.message });
+      }
+    }
+    
+    // Check remaining ads
+    await page.goto('https://mzadqatar.com/en/user/profile/myads', { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 2000));
+    const remaining = await page.evaluate(() => {
+      const cards = document.querySelectorAll('.product');
+      return Array.from(cards).map(c => (c.textContent || '').trim().substring(0, 100));
+    });
+    
+    res.json({ deleteButtonsFound: deleteButtons.length, results, remainingAds: remaining });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
