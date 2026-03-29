@@ -1259,6 +1259,110 @@ app.get('/health', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// ── DELETE AD VIA UI CLICK (diagnostic) ──
+app.get('/delete-ad-ui-click', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage ? mzad._getPage() : null;
+    if (!page) return res.status(500).json({ error: 'No Puppeteer page' });
+    
+    await page.goto('https://mzadqatar.com/en/user/profile/myads', { waitUntil: 'networkidle2', timeout: 30000 });
+    
+    // Get page HTML
+    const html = await page.content();
+    
+    // Extract all links
+    const links = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('a')).map(a => ({
+        text: (a.textContent || '').trim().substring(0, 100),
+        href: a.getAttribute('href') || '',
+        classes: a.className || ''
+      })).filter(l => l.href || l.text);
+    });
+    
+    // Look for delete-related elements
+    const deleteElements = await page.evaluate(() => {
+      const all = document.querySelectorAll('a, button, [onclick], [data-action]');
+      const results = [];
+      all.forEach(el => {
+        const text = (el.textContent || '').toLowerCase();
+        const html = el.outerHTML || '';
+        if (text.includes('delete') || text.includes('حذف') || text.includes('remove') || 
+            html.includes('delete') || html.includes('trash') || html.includes('remove')) {
+          results.push({
+            tag: el.tagName,
+            text: (el.textContent || '').trim().substring(0, 200),
+            href: el.getAttribute('href') || '',
+            onclick: el.getAttribute('onclick') || '',
+            outerHTML: el.outerHTML.substring(0, 500)
+          });
+        }
+      });
+      return results;
+    });
+    
+    // Get Inertia data
+    const inertiaData = await page.evaluate(() => {
+      try {
+        const appEl = document.getElementById('app');
+        if (!appEl || !appEl.dataset.page) return { error: 'no app element or dataset.page' };
+        const pd = JSON.parse(appEl.dataset.page);
+        const propsKeys = Object.keys(pd.props || {});
+        let adsData = null;
+        let adsKey = 'none';
+        for (const key of propsKeys) {
+          const val = pd.props[key];
+          if (val && typeof val === 'object') {
+            if (Array.isArray(val)) {
+              adsData = val.slice(0, 5);
+              adsKey = key + ' (array)';
+              break;
+            }
+            if (val.data && Array.isArray(val.data)) {
+              adsData = val.data.slice(0, 5);
+              adsKey = key + '.data';
+              break;
+            }
+          }
+        }
+        return {
+          component: pd.component,
+          url: pd.url,
+          propsKeys: propsKeys,
+          adsKey: adsKey,
+          adsData: adsData,
+          propsPreview: JSON.stringify(pd.props).substring(0, 2000)
+        };
+      } catch(e) {
+        return { error: e.message };
+      }
+    });
+    
+    // Also check for any product cards or ad listings
+    const adCards = await page.evaluate(() => {
+      const cards = document.querySelectorAll('.product-card, .ad-card, .my-ad, [class*="product"], [class*="advert"]');
+      return Array.from(cards).slice(0, 10).map(c => ({
+        classes: c.className,
+        text: (c.textContent || '').trim().substring(0, 200),
+        html: c.outerHTML.substring(0, 500)
+      }));
+    });
+    
+    res.json({
+      html_length: html.length,
+      links_count: links.length,
+      links: links.slice(0, 50),
+      deleteElements: deleteElements,
+      inertiaData: inertiaData,
+      adCards: adCards
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
+
 app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
