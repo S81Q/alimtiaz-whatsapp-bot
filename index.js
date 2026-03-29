@@ -1873,6 +1873,201 @@ app.get('/post-all-vacant', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ═══════ POST AD VIA BROWSER UI ═══════
+app.get('/post-via-ui', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const page = mzad._getPage();
+    if (!page) return res.json({ error: 'No browser page. Call /auto-login first.' });
+
+    const unit = req.query.unit || 'P49';
+    const catId = parseInt(req.query.cat) || 200; // Default: Job Vacancies (FREE)
+    console.log('[UI-Post] Starting UI post for unit', unit, 'cat', catId);
+
+    // Navigate to add_advertise
+    await page.goto('https://mzadqatar.com/en/add_advertise', { waitUntil: 'networkidle2', timeout: 30000 });
+    const url1 = page.url();
+    if (url1.includes('/login')) return res.json({ error: 'Not logged in', url: url1 });
+    console.log('[UI-Post] On add_advertise page');
+
+    // Wait for Vue app to mount
+    await page.waitForSelector('[data-page]', { timeout: 10000 });
+    await new Promise(r => setTimeout(r, 2000));
+
+    // STEP 1: Use Inertia router.post for step 1 (category selection)
+    const step1Result = await page.evaluate(async (catId) => {
+      return new Promise((resolve) => {
+        const app = document.querySelector('#app').__vue_app__;
+        if (!app) return resolve({ error: 'No Vue app found' });
+        
+        // Access the Inertia router
+        const router = app.config.globalProperties.$inertia || app.config.globalProperties.$page;
+        if (!router) {
+          // Try direct Inertia import
+          if (typeof window.Inertia !== 'undefined') {
+            window.Inertia.post('/en/add_advertise', {
+              step: 1,
+              step1Data: { categoryId: catId, lang: 'aren', mzadyUserNumber: '' },
+            }, {
+              preserveState: true,
+              preserveScroll: true,
+              onSuccess: (page) => resolve({ success: true, url: page.url, component: page.component }),
+              onError: (errors) => resolve({ errors }),
+            });
+          } else {
+            return resolve({ error: 'No Inertia router found' });
+          }
+        } else {
+          router.post('/en/add_advertise', {
+            step: 1,
+            step1Data: { categoryId: catId, lang: 'aren', mzadyUserNumber: '' },
+          }, {
+            preserveState: true,
+            preserveScroll: true,
+            onSuccess: (page) => resolve({ success: true, url: page.url, component: page.component }),
+            onError: (errors) => resolve({ errors }),
+          });
+        }
+        // Timeout
+        setTimeout(() => resolve({ timeout: true }), 15000);
+      });
+    }, catId);
+    console.log('[UI-Post] Step 1 result:', JSON.stringify(step1Result).substring(0, 500));
+    
+    // Wait for page to update
+    await new Promise(r => setTimeout(r, 2000));
+
+    // STEP 2: Submit step 2 via Inertia router
+    const step2Result = await page.evaluate(async (catId) => {
+      return new Promise((resolve) => {
+        const doPost = (poster) => {
+          poster.post('/en/add_advertise', {
+            step: 2,
+            step1Data: { categoryId: catId, lang: 'aren', mzadyUserNumber: '' },
+            step2Data: {
+              cityId: 3, regionId: '38', numberOfRooms: 3,
+              location: '', categoryAdvertiseTypeId: '3',
+              furnishedTypeId: 107, properterylevel: 97,
+              lands_area: 150, properteryfinishing: 366,
+              properterybathrooms: 99, salesref: '',
+              rentaltype: 791, subCategoryId: 96,
+            },
+            step3Data: {},
+          }, {
+            preserveState: true,
+            preserveScroll: true,
+            onSuccess: (page) => resolve({ success: true, url: page.url }),
+            onError: (errors) => resolve({ errors }),
+          });
+        };
+        
+        const app = document.querySelector('#app').__vue_app__;
+        const router = app && app.config.globalProperties.$inertia;
+        if (router) doPost(router);
+        else if (typeof window.Inertia !== 'undefined') doPost(window.Inertia);
+        else resolve({ error: 'No router' });
+        setTimeout(() => resolve({ timeout: true }), 15000);
+      });
+    }, catId);
+    console.log('[UI-Post] Step 2 result:', JSON.stringify(step2Result).substring(0, 500));
+    
+    await new Promise(r => setTimeout(r, 2000));
+
+    // STEP 3: Submit with title, description, price, image
+    const { buildTitleAr, buildTitleEn, buildDescription } = require('./ad-builders');
+    const vacantProperties = {
+      'P26': { Unit: 'P26', Type: 'Labor Camp', Location: 'Industrial 24 Labor Camp', Rent_QAR: '' },
+      'P48': { Unit: 'P48', Type: 'Commercial', Location: 'Returned Apartment', Rent_QAR: '' },
+      'P49': { Unit: 'P49', Type: 'Commercial', Location: 'Vacant Room', Rent_QAR: '' },
+    };
+    const prop = vacantProperties[unit] || vacantProperties['P49'];
+    const titleEn = buildTitleEn(prop);
+    const titleAr = buildTitleAr(prop);
+    const desc = buildDescription(prop);
+    const price = parseInt(prop.Rent_QAR) || 5000;
+
+    // Read placeholder image as base64
+    const imgPath = require('path').join(__dirname, 'placeholder.jpg');
+    let imgB64 = '';
+    if (require('fs').existsSync(imgPath)) {
+      imgB64 = require('fs').readFileSync(imgPath).toString('base64');
+    }
+
+    const step3Result = await page.evaluate(async (catId, titleEn, titleAr, desc, price, imgB64) => {
+      return new Promise((resolve) => {
+        // Create image blob from base64
+        let blob = null;
+        if (imgB64) {
+          const byteChars = atob(imgB64);
+          const byteArr = new Uint8Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+          blob = new Blob([byteArr], { type: 'image/jpeg' });
+        }
+
+        const formData = {
+          step: 3,
+          step1Data: { categoryId: catId, lang: 'aren', mzadyUserNumber: '' },
+          step2Data: {
+            cityId: 3, regionId: '38', numberOfRooms: 3,
+            location: '', categoryAdvertiseTypeId: '3',
+            furnishedTypeId: 107, properterylevel: 97,
+            lands_area: 150, properteryfinishing: 366,
+            properterybathrooms: 99, salesref: '',
+            rentaltype: 791, subCategoryId: 96,
+          },
+          step3Data: {
+            productPrice: price,
+            productNameEnglish: titleEn,
+            productDescriptionEnglish: desc,
+            productNameArabic: titleAr,
+            productDescriptionArabic: desc,
+            productNameArEn: '',
+            productDescriptionArEn: '',
+            autoRenew: false,
+            agree_commission: 1,
+            currencyId: 1,
+            isResetImages: 0,
+            productId: '',
+            images: blob ? [{ id: 0, type: 'image/jpeg', url: '', tempFile: blob }] : [],
+          },
+        };
+
+        const doPost = (poster) => {
+          poster.post('/en/add_advertise', formData, {
+            forceFormData: true,
+            preserveState: false,
+            onSuccess: (page) => resolve({ success: true, url: page.url, component: page.component }),
+            onError: (errors) => resolve({ errors }),
+            onFinish: () => {},
+          });
+        };
+
+        const app = document.querySelector('#app').__vue_app__;
+        const router = app && app.config.globalProperties.$inertia;
+        if (router) doPost(router);
+        else if (typeof window.Inertia !== 'undefined') doPost(window.Inertia);
+        else resolve({ error: 'No router' });
+        setTimeout(() => resolve({ timeout: true }), 30000);
+      });
+    }, catId, titleEn, titleAr, desc, price, imgB64);
+    console.log('[UI-Post] Step 3 result:', JSON.stringify(step3Result).substring(0, 1000));
+
+    // Check final URL
+    const finalUrl = page.url();
+    console.log('[UI-Post] Final URL:', finalUrl);
+
+    res.json({ 
+      success: true, unit, catId,
+      step1: step1Result, step2: step2Result, step3: step3Result,
+      finalUrl 
+    });
+  } catch (e) {
+    console.error('[UI-Post] Error:', e);
+    res.json({ error: e.message, stack: e.stack?.substring(0, 500) });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
