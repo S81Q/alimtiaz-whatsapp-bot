@@ -1787,6 +1787,92 @@ app.get('/set-session', (req, res) => {
   res.json({ success: true, message: 'Session injected', sessionLen: session.length, xsrfLen: xsrf.length });
 });
 
+
+// Auto-login: send OTP, wait, read from Gmail, verify - all in one call
+app.get('/auto-login', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    
+    // Step 1: Send OTP
+    console.log('[auto-login] Sending OTP...');
+    const otpResult = await mzad.sendOtpOnly();
+    if (!otpResult.success) {
+      return res.json({ step: 'send-otp', error: otpResult.error });
+    }
+    console.log('[auto-login] OTP sent successfully');
+    
+    // Step 2: Wait 15 seconds for SMS to arrive
+    console.log('[auto-login] Waiting 15s for SMS forwarding...');
+    await new Promise(r => setTimeout(r, 15000));
+    
+    // Step 3: Read OTP from Gmail (try multiple times)
+    const gmailOtp = require('./gmail-otp');
+    let otpCode = null;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      console.log('[auto-login] Gmail check attempt', attempt);
+      try {
+        const gmailResult = await gmailOtp.readOtpFromGmail('mzad', 1, 5000, Date.now() - 300000);
+        if (gmailResult) {
+          otpCode = gmailResult;
+          console.log('[auto-login] OTP found:', otpCode);
+          break;
+        }
+      } catch (e) {
+        console.log('[auto-login] Gmail error:', e.message);
+      }
+      if (attempt < 6) {
+        console.log('[auto-login] Waiting 10s before retry...');
+        await new Promise(r => setTimeout(r, 10000));
+      }
+    }
+    
+    if (!otpCode) {
+      return res.json({ step: 'gmail-read', error: 'Could not find OTP in Gmail after 6 attempts' });
+    }
+    
+    // Step 4: Verify OTP immediately
+    console.log('[auto-login] Verifying OTP:', otpCode);
+    const verifyResult = await mzad.verifyOtpOnly(otpCode);
+    
+    res.json({ 
+      step: 'complete',
+      success: verifyResult.success,
+      message: verifyResult.message || verifyResult.error,
+      otpCode: otpCode
+    });
+  } catch (e) {
+    console.error('[auto-login] Error:', e.message);
+    res.status(500).json({ step: 'error', error: e.message });
+  }
+});
+
+// Post all vacant units in sequence (call after login)
+app.get('/post-all-vacant', async (req, res) => {
+  try {
+    const mzad = require('./mzad');
+    const units = ['P49', 'P26', 'P48'];
+    const vacantProperties = {
+      'P26': { Unit: 'P26', Type: 'Labor Camp', Location: 'سكن عمال الصناعية 24', Rent_QAR: '', Maps_Link: 'https://maps.app.goo.gl/bsVeGSo9JQwpH4kY8', Notes: 'Remaining room to be rented' },
+      'P48': { Unit: 'P48', Type: 'Commercial', Location: 'شقة - تم إرجاعها', Rent_QAR: '', Maps_Link: '', Notes: 'Apartment returned' },
+      'P49': { Unit: 'P49', Type: 'Commercial', Location: 'غرفة شاغرة', Rent_QAR: '', Maps_Link: '', Notes: 'Room vacant - searching for new tenant' },
+    };
+    const results = [];
+    for (const unit of units) {
+      console.log('[post-all] Posting unit', unit);
+      try {
+        const session = await mzad.getSession();
+        if (!session) { results.push({ unit, error: 'No session' }); continue; }
+        const result = await mzad.postAd(vacantProperties[unit], session);
+        results.push({ unit, success: result.success, method: result.method, adUrl: result.step3?.url });
+      } catch (e) {
+        results.push({ unit, error: e.message });
+      }
+    }
+    res.json({ results });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.listen(PORT, () => {
   console.log(`Al-Imtiaz WhatsApp Bot running on port ${PORT}`);
 
