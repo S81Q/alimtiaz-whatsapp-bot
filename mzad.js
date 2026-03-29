@@ -1019,6 +1019,14 @@ async function postAd(property, sessionData) {
   const s3gAAD = s3data?.getAddAdvertiseData;
   const s3url = s3data?.url;
   
+  // SILENT FAILURE CHECK: paid category redirects to myads without error
+  if (!s3ApiData && s3url && s3url.includes('/myads') && categoryId !== 8) {
+    console.error("[Mzad] Step 3 silent failure: redirected to myads with no apiData. Category", categoryId, "likely requires package.");
+    console.log("[Mzad] Triggering fallback to next category...");
+    const fallbackProp = { ...property, _overrideCategory: property._triedCat8 ? 200 : 8 }; fallbackProp._triedCat8 = true;
+    return postAd(fallbackProp, { session, xsrf });
+  }
+  
   // If apiData has didNotSaved, the ad was NOT created
   if (s3ApiData?.didNotSaved) {
     console.error("[Mzad] Step 3 failed: didNotSaved =", s3ApiData.didNotSaved, "message:", s3ApiData.message);
