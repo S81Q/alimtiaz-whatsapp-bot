@@ -294,7 +294,7 @@ async function browserFetch(page, url, options) {
     const text = await res.text();
     let json = null;
     try { json = JSON.parse(text); } catch {}
-    return { status: res.status, body: text.substring(0, 3000), json, headers: Object.fromEntries(res.headers.entries()) };
+    return { status: res.status, body: json ? null : text.substring(0, 5000), json, headers: Object.fromEntries(res.headers.entries()) };
   }, url, options);
 }
 
@@ -843,179 +843,83 @@ async function postAd(property, sessionData) {
 
   let step3Res;
   let currencyId = 1; // default fallback (hoisted for resubmit access)
-  if (_page) {
-    // SYNC browser cookies with latest axios session before step 3
-    try {
-      console.log('[Mzad] Syncing browser cookies before step 3...');
-      await _page.setCookie(
-        { name: 'mzadqatar_session', value: session, domain: 'mzadqatar.com', path: '/', httpOnly: true },
-        { name: 'XSRF-TOKEN', value: xsrf, domain: 'mzadqatar.com', path: '/' }
-      );
-    } catch (e) { console.warn('[Mzad] Cookie sync error:', e.message); }
-
-
-  // Extract currencyId from page Inertia props
-  currencyId = 1;
-  try {
-    currencyId = await _page.evaluate(() => {
-      try {
-        const el = document.querySelector("[data-page]");
-        if (el) {
-          const pageData = JSON.parse(el.getAttribute("data-page"));
-          const currencies = pageData?.props?.settingsData?.currencies;
-          if (currencies && currencies.length > 0) return currencies[0].id;
-        }
-        // Fallback: try Vue app internal state
-        const app = document.querySelector("#app")?.__vue_app__;
-        if (app) {
-          const props = app.config?.globalProperties?.$page?.props;
-          if (props?.settingsData?.currencies?.[0]?.id) return props.settingsData.currencies[0].id;
-        }
-      } catch(e) {}
-      return null;
-    });
-    console.log("[Mzad] Extracted currencyId:", currencyId);
-  } catch(e) {
-    console.warn("[Mzad] Could not extract currencyId, using default:", e.message);
-  }
-    console.log('[Mzad] Step 3: Using browser fetch with FormData...');
-    const csrf = decodedXsrf(xsrf);
-    const ver = _inertiaVersion || '';
-    step3Res = await _page.evaluate(async (url, p, tEn, dEn, tAr, dAr, imgB64, csrfToken, inertiaVer, s1Data, s2Data, curId, prodId) => {
-      // Convert base64 to Blob
-      const byteChars = atob(imgB64);
-      const byteArr = new Uint8Array(byteChars.length);
-      for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
-      const blob = new Blob([byteArr], { type: 'image/jpeg' });
-
-      // Recursive FormData builder (mimics Inertia's objectToFormData)
-      function appendFormData(fd, key, value) {
-        if (value === null || value === undefined) {
-          fd.append(key, '');
-        } else if (value instanceof Blob || value instanceof File) {
-          fd.append(key, value, value.name || 'property.jpg');
-        } else if (typeof value === 'object' && !Array.isArray(value)) {
-          for (const [k, v] of Object.entries(value)) {
-            appendFormData(fd, key + '[' + k + ']', v);
-          }
-        } else if (Array.isArray(value)) {
-          if (value.length === 0) {
-            fd.append(key, '');
-          } else {
-            for (let i = 0; i < value.length; i++) {
-              appendFormData(fd, key + '[' + i + ']', value[i]);
-            }
-          }
-        } else {
-          fd.append(key, String(value));
-        }
-      }
-
-      const fd = new FormData();
-      fd.append('step', '3');
-      // Include step1Data (from server prevData)
-      appendFormData(fd, 'step1Data', s1Data || {});
-      // Include step2Data (from server prevData)
-      appendFormData(fd, 'step2Data', s2Data || {});
-      // step3Data
-      // REPLACED: Using recursive step3 builder instead
-      const step3Obj = {
-        productPrice: String(p),
-        productNameEnglish: tEn,
-        productDescriptionEnglish: dEn,
-        productNameArabic: tAr,
-        productDescriptionArabic: dAr,
-        productNameArEn: '',
-        productDescriptionArEn: '',
-        autoRenew: '0',
-        agree_commission: '1',
-        currencyId: String(curId || 1),
-        isResetImages: '0',
-        productId: prodId || '',
-        images: [
-          { id: '0', type: 'image/jpeg', url: '', tempFile: blob }
-        ],
-      };
-      appendFormData(fd, 'step3Data', step3Obj);
-      /* OLD MANUAL APPENDS BELOW - SKIP
-      // Double-append removed - appendFormData already handles step3Obj
-      END OLD MANUAL APPENDS */
-
-      // Log FormData entries for debugging
-      const fdEntries = [];
-      for (const [k, v] of fd.entries()) {
-        if (v instanceof Blob) {
-          fdEntries.push(k + ' = [Blob ' + v.size + ' bytes ' + v.type + ']');
-        } else {
-          fdEntries.push(k + ' = ' + String(v).substring(0, 100));
-        }
-      }
-      console.log('[Mzad-Debug] Step3 FD entries(' + fdEntries.length + '):', fdEntries.slice(0, 30).join(' | '));
-      console.log('[Mzad-Debug] s1Data:', JSON.stringify(s1Data).substring(0, 500));
-      console.log('[Mzad-Debug] s2Data:', JSON.stringify(s2Data).substring(0, 500));
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Accept': 'text/html, application/xhtml+xml',
-          'X-Requested-With': 'XMLHttpRequest',
-          'X-Inertia': 'true',
-          'X-Inertia-Version': inertiaVer,
-          'X-XSRF-TOKEN': csrfToken,
-        },
-        body: fd,
-        credentials: 'include',
-      });
-      const text = await res.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch {}
-      // Extract apiData safely (with size limit to avoid huge payloads)
-      let apiDataSafe = null;
-      if (json?.props?.getAddAdvertiseData?.apiData) {
-        const ad = json.props.getAddAdvertiseData.apiData;
-        apiDataSafe = {
-          keys: Object.keys(ad),
-          didNotSaved: ad.didNotSaved,
-          status: ad.status,
-          errorType: ad.errorType,
-          message: ad.message || ad.statusMsg,
-          statusMsg: ad.statusMsg,
-          groups_count: ad.groups ? ad.groups.length : null,
-        };
-      }
-      return { status: res.status, data: json ? { component: json.component, props_keys: Object.keys(json.props || {}), errors: json.props?.errors, step: json.props?.step, flash: json.props?.flash, url: json.url, redirectBackData: json.props?.redirectBackData || null, getAddAdvertiseData: json.props?.getAddAdvertiseData ? { step: json.props.getAddAdvertiseData.prevData?.step, prevData: json.props.getAddAdvertiseData.prevData, adsSelectedData: json.props.getAddAdvertiseData.adsSelectedData, apiData: apiDataSafe } : null, currencies: json.props?.settingsData?.currencies?.slice(0, 3) } : text.substring(0, 500), fullLen: text.length, isJson: !!json };
-    }, `${BASE_URL}/en/add_advertise`, price, titleEn, desc, titleAr, desc, imgBase64, csrf, ver,
-       serverStep1Data || { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' }, serverStep2Data || (typeof step2Data !== 'undefined' ? step2Data : {}), currencyId, freeProductId || '');
-    // Wrap to match expected format
-    step3Res = { status: step3Res.status, data: step3Res.data };
-  } else {
-    // Fallback: axios FormData
+  // ── STEP 3: Pure axios FormData (no browser fetch) ──
+  {
     const form = new FormData();
     form.append('step', '3');
+
+    // step1Data (server prevData or fallback)
+    const s1 = serverStep1Data || { categoryId: categoryId, lang: 'aren', mzadyUserNumber: '' };
+    for (const [k, v] of Object.entries(s1)) {
+      form.append('step1Data[' + k + ']', v == null ? '' : String(v));
+    }
+
+    // step2Data (server prevData or fallback)
+    const s2 = serverStep2Data || {};
+    for (const [k, v] of Object.entries(s2)) {
+      if (v == null) {
+        form.append('step2Data[' + k + ']', '');
+      } else if (typeof v === 'object' && !Array.isArray(v)) {
+        for (const [k2, v2] of Object.entries(v)) {
+          form.append('step2Data[' + k + '][' + k2 + ']', v2 == null ? '' : String(v2));
+        }
+      } else {
+        form.append('step2Data[' + k + ']', String(v));
+      }
+    }
+
+    // step3Data
     form.append('step3Data[productPrice]', String(price));
     form.append('step3Data[productNameEnglish]', titleEn);
     form.append('step3Data[productDescriptionEnglish]', desc);
     form.append('step3Data[productNameArabic]', titleAr);
     form.append('step3Data[productDescriptionArabic]', desc);
+    form.append('step3Data[productNameArEn]', '');
+    form.append('step3Data[productDescriptionArEn]', '');
     form.append('step3Data[autoRenew]', '0');
     form.append('step3Data[agree_commission]', '1');
-    // Inertia nested object format for images
+    form.append('step3Data[currencyId]', '1');
+    form.append('step3Data[isResetImages]', '0');
+    form.append('step3Data[productId]', freeProductId || '');
+
+    // Image
     form.append('step3Data[images][0][id]', '0');
     form.append('step3Data[images][0][type]', 'image/jpeg');
     form.append('step3Data[images][0][url]', '');
     form.append('step3Data[images][0][tempFile]', fs.createReadStream(imagePath), {
       filename: 'property.jpg', contentType: 'image/jpeg',
     });
-    const axiosRes = await axios.post(`${BASE_URL}/en/add_advertise`, form, {
+
+    console.log('[Mzad] Step 3 axios: s1Data:', JSON.stringify(s1));
+    console.log('[Mzad] Step 3 axios: s2Data:', JSON.stringify(s2).substring(0, 500));
+    console.log('[Mzad] Step 3 axios: productId:', freeProductId, 'price:', price);
+
+    // Get CF cookies from browser if available
+    let cfCookieStr = '';
+    if (_page) {
+      try {
+        const bc = await _page.cookies('https://mzadqatar.com');
+        const cfc = bc.filter(c => c.name.startsWith('cf_') || c.name.startsWith('__cf'));
+        if (cfc.length > 0) cfCookieStr = '; ' + cfc.map(c => c.name + '=' + c.value).join('; ');
+      } catch(e) {}
+    }
+
+    const axiosRes = await axios.post(BASE_URL + "/en/add_advertise", form, {
       headers: {
         ...form.getHeaders(),
-        'X-Requested-With': 'XMLHttpRequest', 'X-Inertia': 'true', 'X-Inertia-Version': '',
-        'X-XSRF-TOKEN': decodedXsrf(xsrf), 'Cookie': buildCookieStr(session, xsrf),
-        'Origin': BASE_URL, 'Referer': `${BASE_URL}/en/add_advertise`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Inertia': 'true',
+        'X-Inertia-Version': _inertiaVersion || '',
+        'X-XSRF-TOKEN': decodedXsrf(xsrf),
+        'Cookie': buildCookieStr(session, xsrf) + cfCookieStr,
+        'Origin': BASE_URL,
+        'Referer': BASE_URL + '/en/add_advertise',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
       maxRedirects: 0, validateStatus: s => s < 500, maxContentLength: 50 * 1024 * 1024,
     });
+    console.log('[Mzad] Step 3 axios status:', axiosRes.status);
+    console.log('[Mzad] Step 3 axios data:', JSON.stringify(axiosRes.data).substring(0, 2000));
     step3Res = axiosRes;
   }
 
