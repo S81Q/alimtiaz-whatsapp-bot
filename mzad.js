@@ -698,15 +698,29 @@ async function postAd(property, sessionData) {
   let freeProductId = '';
   const grpSrc = groupsData || pageGroupsData;
   if (grpSrc && grpSrc.groups) {
+    // First: try to find the exact categoryId match
     for (const g of grpSrc.groups) {
       for (const p of (g.products || [])) {
-        if (p.isAllowToAdd) {
+        if (String(p.productId) === String(categoryId) && p.isAllowToAdd) {
           freeProductId = String(p.productId);
-          console.log('[Mzad] Found free productId:', freeProductId, 'group:', g.groupName);
+          console.log('[Mzad] Found matching productId:', freeProductId, '(matches categoryId)');
           break;
         }
       }
       if (freeProductId) break;
+    }
+    // Fallback: pick first free product if exact match not found
+    if (!freeProductId) {
+      for (const g of grpSrc.groups) {
+        for (const p of (g.products || [])) {
+          if (p.isAllowToAdd) {
+            freeProductId = String(p.productId);
+            console.log('[Mzad] Found free productId (fallback):', freeProductId, 'group:', g.groupName);
+            break;
+          }
+        }
+        if (freeProductId) break;
+      }
     }
   }
   if (!freeProductId) {
