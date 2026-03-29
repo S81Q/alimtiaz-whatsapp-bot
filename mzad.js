@@ -844,6 +844,15 @@ async function postAd(property, sessionData) {
   let step3Res;
   let currencyId = 1; // default fallback (hoisted for resubmit access)
   if (_page) {
+    // SYNC browser cookies with latest axios session before step 3
+    try {
+      console.log('[Mzad] Syncing browser cookies before step 3...');
+      await _page.setCookie(
+        { name: 'mzadqatar_session', value: session, domain: 'mzadqatar.com', path: '/', httpOnly: true },
+        { name: 'XSRF-TOKEN', value: xsrf, domain: 'mzadqatar.com', path: '/' }
+      );
+    } catch (e) { console.warn('[Mzad] Cookie sync error:', e.message); }
+
 
   // Extract currencyId from page Inertia props
   currencyId = 1;
