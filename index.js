@@ -411,7 +411,7 @@ app.post('/conversations-webhook', async (req, res) => {
     if (isVacancyQuestion && properties.length > 0) {
       const unitList = properties.map((p, i) => `${i+1}. ${p.Unit} - ${p.Property_Name}`).join('\n');
       const directReply = `الوحدات الفاضية حالياً (${properties.length} وحدة):\n\n${unitList}\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389`;
-      await sendWhatsAppReply(conversationSid, directReply);
+      await client.conversations.v1.conversations(conversationSid).messages.create({ body: directReply });
       await logLead({ phone, name: collectedName, language: 'ar', question: userMessage, interestedUnit: '', status: 'New' });
       return;
     }
