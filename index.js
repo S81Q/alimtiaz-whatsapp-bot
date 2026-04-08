@@ -278,23 +278,40 @@ async function getVacantProperties() {
     if (unit) vacancyMap[unit] = { status, propertyName };
   });
 
+  // Build a map of Properties by Unit ID for enrichment
   const propHeaders = propRows[0];
-  return propRows.slice(1)
+  const propByUnit = {};
+  propRows.slice(1).forEach(row => {
+    const obj = {};
+    propHeaders.forEach((h, i) => { obj[h] = row[i] || ''; });
+    if (obj.Unit) propByUnit[obj.Unit] = obj;
+  });
+
+  // Return ALL units from Vacancy sheet that are marked Vacant,
+  // enriched with Properties data where unit IDs match
+  return vacancyRows.slice(1)
+    .filter(row => {
+      const status = row[vacStatusIdx] || '';
+      return status === 'Vacant' || status === 'Available';
+    })
     .map(row => {
-      const obj = {};
-      propHeaders.forEach((h, i) => { obj[h] = row[i] || ''; });
-      return obj;
-    })
-    .map(prop => {
-      const vac = vacancyMap[prop.Unit];
-      if (vac && vac.propertyName && !prop.Notes) prop.Property_Name = vac.propertyName;
-      return prop;
-    })
-    .filter(prop => {
-      const vac = vacancyMap[prop.Unit];
-      // Only show units explicitly marked Vacant in the Vacancy sheet
-      if (!vac) return false;
-      return vac.status === 'Vacant' || vac.status === 'Available';
+      const unit = row[vacUnitIdx] || '';
+      const propertyName = vacNameIdx >= 0 ? (row[vacNameIdx] || '') : '';
+      // Try to enrich with Properties data
+      const propData = propByUnit[unit] || {};
+      return {
+        Unit: unit,
+        Status: 'Vacant',
+        Property_Name: propertyName || propData.Property_Name || '',
+        Location: propData.Location || '',
+        Type: propData.Type || '',
+        Rent_QAR: propData.Rent_QAR || '',
+        Size_sqm: propData.Size_sqm || '',
+        Bedrooms: propData.Bedrooms || '',
+        Bathrooms: propData.Bathrooms || '',
+        Notes: propData.Notes || '',
+        Maps_Link: propData.Maps_Link || ''
+      };
     });
 }
 
