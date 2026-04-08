@@ -69,78 +69,132 @@ async function getGoogleSheets() {
   return sheetsClient;
 }
 
-// --- Vacancy Sync (replaces Apps Script dependency) ---
+// --- Vacancy Sync via Gmail Rent Report PDF ---
 async function syncVacancy() {
-  console.log('[VacancySync] Starting sync...');
-  const sheets = await getGoogleSheets();
+  console.log('[VacancySync] Starting sync via Gmail rent report...');
+  try {
+    const vacantUnits = await getVacantUnitsFromGmail();
+    if (vacantUnits && vacantUnits.length > 0) {
+      await writeVacancyToSheet(vacantUnits);
+      console.log('[VacancySync] Done: ' + vacantUnits.length + ' vacant units from Gmail');
+      return { vacant: vacantUnits.length, total: vacantUnits.length, source: 'gmail' };
+    }
+  } catch (e) {
+    console.error('[VacancySync] Gmail method failed, falling back:', e.message);
+  }
+  return await syncVacancyFromSheet();
+}
 
-  // Read Properties tab
-  const propRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: 'Properties!A1:Z1000',
-  });
-  const propRows = propRes.data.values || [];
-  if (propRows.length < 2) {
-    console.log('[VacancySync] No properties found');
-    return;
+async function getVacantUnitsFromGmail() {
+  const { google } = require('googleapis');
+  if (!process.env.GMAIL_OAUTH_CLIENT_ID || !process.env.GMAIL_OAUTH_REFRESH_TOKEN) {
+    throw new Error('No Gmail OAuth credentials');
+  }
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GMAIL_OAUTH_CLIENT_ID,
+    process.env.GMAIL_OAUTH_CLIENT_SECRET,
+    'urn:ietf:wg:oauth:2.0:oob'
+  );
+  oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_OAUTH_REFRESH_TOKEN });
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+  const queries = [
+    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d subject:\u062a\u0642\u0631\u064a\u0631 \u0627\u0644\u0627\u064a\u062c\u0627\u0631\u0627\u062a',
+    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d subject:\u0627\u0644\u0627\u064a\u062c\u0627\u0631\u0627\u062a \u0627\u0644\u0645\u062d\u0635\u0644\u0629',
+    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d subject:\u0643\u0634\u0641 \u0627\u0644\u0627\u064a\u062c\u0627\u0631\u0627\u062a',
+  ];
+
+  let latestMsgId = null;
+  let latestDate = null;
+
+  for (const q of queries) {
+    const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 5 });
+    for (const msg of (res.data.messages || [])) {
+      const full = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'metadata', metadataHeaders: ['Date'] });
+      const dateHeader = (full.data.payload.headers || []).find(h => h.name === 'Date');
+      const msgDate = dateHeader ? new Date(dateHeader.value) : new Date(0);
+      if (!latestDate || msgDate > latestDate) { latestDate = msgDate; latestMsgId = msg.id; }
+    }
+    if (latestMsgId) break;
   }
 
+  if (!latestMsgId) throw new Error('No rent report email found in Gmail');
+  console.log('[VacancySync] Found rent report: ' + latestMsgId + ' from ' + latestDate);
+
+  const full = await gmail.users.messages.get({ userId: 'me', id: latestMsgId, format: 'full' });
+  const parts = full.data.payload.parts || [];
+  const pdfPart = parts.find(p =>
+    p.filename && p.filename.toLowerCase().includes('.pdf') &&
+    !p.filename.includes('\u0627\u064a\u0635\u0627\u0644') && !p.filename.includes('\u0635\u0648\u0631')
+  );
+
+  if (!pdfPart || !pdfPart.body.attachmentId) throw new Error('No rent report PDF found');
+  console.log('[VacancySync] Found PDF: ' + pdfPart.filename);
+
+  const attRes = await gmail.users.attachments.get({ userId: 'me', messageId: latestMsgId, id: pdfPart.body.attachmentId });
+  const pdfBase64 = attRes.data.data.replace(/-/g, '+').replace(/_/g, '/');
+
+  console.log('[VacancySync] Sending PDF to Claude for analysis...');
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 4096,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
+        { type: 'text', text: 'Analyze this Arabic rent report PDF. Find ALL vacant/available units.\n\nVACANT if: remark says \u0634\u0627\u063a\u0631/\u0634\u0627\u063a\u0631\u0629/vacant/empty, or \u062a\u0645 \u0625\u0631\u062c\u0627\u0639 (returned), or received < 50% of rent with rooms unrented, or \u0627\u0644\u0627\u0633\u062a\u0644\u0627\u0645 empty + zero received + no bounced check.\n\nEXCLUDE: \u0634\u064a\u0643 \u0645\u0631\u062a\u062c\u0639 or \u0645\u0631\u062a\u062c\u0639 or \u0625\u062c\u0631\u0627\u0621\u0627\u062a \u0642\u0636\u0627\u0626\u064a\u0629 (bounced check), or \u0639\u0642\u062f \u062c\u062f\u064a\u062f, or full rent received + no vacancy words.\n\nReturn ONLY JSON array:\n[{"unit":"P49","property":"\u063a\u0631\u0641\u0629 \u0627\u0644\u0633\u062f","monthlyRent":"1100","status":"\u0634\u0627\u063a\u0631\u0629"}]\nIf none: []\nJSON only.' }
+      ]
+    }]
+  });
+
+  const responseText = response.content[0].text;
+  console.log('[VacancySync] Claude response:', responseText.substring(0, 200));
+  const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) throw new Error('Claude returned no JSON');
+  const units = JSON.parse(jsonMatch[0]);
+  console.log('[VacancySync] Found ' + units.length + ' vacant units');
+  return units;
+}
+
+async function writeVacancyToSheet(vacantUnits) {
+  const sheets = await getGoogleSheets();
+  const now = new Date().toISOString();
+  try { await sheets.spreadsheets.batchUpdate({ spreadsheetId: SHEET_ID, requestBody: { requests: [{ addSheet: { properties: { title: 'Vacancy' } } }] } }); } catch (e) {}
+  await sheets.spreadsheets.values.clear({ spreadsheetId: SHEET_ID, range: 'Vacancy!A:E' });
+  const rows = [
+    ['Unit', 'Status', 'Property_Name', 'Available_From', 'Updated_At'],
+    ...vacantUnits.map(u => [u.unit || '', 'Vacant', u.property || '', now, now])
+  ];
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID, range: 'Vacancy!A1:E' + rows.length,
+    valueInputOption: 'USER_ENTERED', requestBody: { values: rows },
+  });
+}
+
+async function syncVacancyFromSheet() {
+  const sheets = await getGoogleSheets();
+  const propRes = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Properties!A1:Z1000' });
+  const propRows = propRes.data.values || [];
+  if (propRows.length < 2) return { vacant: 0, total: 0, source: 'sheet' };
   const headers = propRows[0];
   const unitIdx = headers.indexOf('Unit');
   const statusIdx = headers.indexOf('Status');
-  const notesIdx = headers.indexOf('Notes') !== -1 ? headers.indexOf('Notes') : headers.indexOf('Location');
-
   const now = new Date().toISOString();
   const vacancyData = [
     ['Unit', 'Status', 'Property_Name', 'Available_From', 'Updated_At'],
     ...propRows.slice(1).map(row => {
       const unit = row[unitIdx] || '';
       const propStatus = (row[statusIdx] || '').trim().toLowerCase();
-      const propertyName = notesIdx >= 0 ? (row[notesIdx] || '') : '';
-      // Map property status to vacancy status
       const isVacant = !propStatus || propStatus === 'available' || propStatus === 'vacant';
-      return [
-        unit,
-        isVacant ? 'Vacant' : 'Occupied',
-        propertyName,
-        isVacant ? now : '',
-        now,
-      ];
+      return [unit, isVacant ? 'Vacant' : 'Occupied', '', isVacant ? now : '', now];
     }),
   ];
-
-  // Ensure Vacancy tab exists
-  try {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title: 'Vacancy' } } }],
-      },
-    });
-    console.log('[VacancySync] Created Vacancy tab');
-  } catch (e) {
-    // Tab already exists
-  }
-
-  // Clear and write
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: SHEET_ID,
-    range: 'Vacancy!A:E',
-  });
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range: 'Vacancy!A1:E' + vacancyData.length,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: vacancyData },
-  });
-
+  try { await sheets.spreadsheets.batchUpdate({ spreadsheetId: SHEET_ID, requestBody: { requests: [{ addSheet: { properties: { title: 'Vacancy' } } }] } }); } catch (e) {}
+  await sheets.spreadsheets.values.clear({ spreadsheetId: SHEET_ID, range: 'Vacancy!A:E' });
+  await sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: 'Vacancy!A1:E' + vacancyData.length, valueInputOption: 'USER_ENTERED', requestBody: { values: vacancyData } });
   const vacantCount = vacancyData.slice(1).filter(r => r[1] === 'Vacant').length;
-  const totalCount = vacancyData.length - 1;
-  console.log(`[VacancySync] Done: ${vacantCount} vacant / ${totalCount} total units`);
-  return { vacant: vacantCount, total: totalCount };
+  return { vacant: vacantCount, total: vacancyData.length - 1, source: 'sheet' };
 }
-
 // --- Property Retrieval (filtered by vacancy) ---
 async function getVacantProperties() {
   const sheets = await getGoogleSheets();
