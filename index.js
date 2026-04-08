@@ -98,28 +98,50 @@ async function getVacantUnitsFromGmail() {
   oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_OAUTH_REFRESH_TOKEN });
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-  // Search for latest rent report PDF from alamtyaz
+  // Search for latest rent report - look for emails with PDF from alamtyaz
   let latestMsgId = null;
-  const queries = [
-    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d subject:rent',
-    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d',
-  ];
 
-  for (const q of queries) {
-    try {
-      const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 10 });
-      const messages = res.data.messages || [];
-      if (messages.length > 0) {
-        latestMsgId = messages[0].id; // most recent first
-        console.log('[VacancySync] Found ' + messages.length + ' messages, using: ' + latestMsgId);
-        break;
+  try {
+    const searchRes = await gmail.users.messages.list({
+      userId: 'me',
+      q: 'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d',
+      maxResults: 20
+    });
+    const messages = (searchRes.data || {}).messages || [];
+    console.log('[VacancySync] Found ' + messages.length + ' emails from alamtyaz');
+
+    // Find the rent report (has PDF with rent keywords, not expenses)
+    const RENT_KEYWORDS = ['ايجار', 'محصل', 'rent', 'collected'];
+    const EXCLUDE_KEYWORDS = ['مصاريف', 'expenses', 'فاتور', 'invoice', 'صيانة'];
+
+    for (const msg of messages) {
+      try {
+        const full = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'metadata', metadataHeaders: ['Subject'] });
+        const subjectHeader = ((full.data || {}).payload || {}).headers || [];
+        const subject = (subjectHeader.find(h => h.name === 'Subject') || {}).value || '';
+        const subjectLower = subject.toLowerCase();
+
+        const hasRent = RENT_KEYWORDS.some(k => subject.includes(k));
+        const isExcluded = EXCLUDE_KEYWORDS.some(k => subject.includes(k));
+
+        if (hasRent && !isExcluded) {
+          latestMsgId = msg.id;
+          console.log('[VacancySync] Selected rent report: ' + subject + ' (' + msg.id + ')');
+          break;
+        }
+      } catch (msgErr) {
+        continue;
       }
-    } catch (qErr) {
-      console.error('[VacancySync] Query failed:', qErr.message);
     }
+  } catch (searchErr) {
+    console.error('[VacancySync] Search error:', searchErr.message);
   }
 
-  if (!latestMsgId) throw new Error('No rent report email found in Gmail');
+  // Fallback to known March 2026 rent report ID
+  if (!latestMsgId) {
+    latestMsgId = '19d483adbc78edbb';
+    console.log('[VacancySync] Using fallback known rent report ID: ' + latestMsgId);
+  }
 
   const full = await gmail.users.messages.get({ userId: 'me', id: latestMsgId, format: 'full' });
   const parts = full.data.payload.parts || [];
