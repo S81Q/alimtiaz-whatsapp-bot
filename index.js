@@ -98,28 +98,28 @@ async function getVacantUnitsFromGmail() {
   oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_OAUTH_REFRESH_TOKEN });
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
+  // Search for latest rent report PDF from alamtyaz
+  let latestMsgId = null;
   const queries = [
-    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d subject:\u062a\u0642\u0631\u064a\u0631 \u0627\u0644\u0627\u064a\u062c\u0627\u0631\u0627\u062a',
-    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d subject:\u0627\u0644\u0627\u064a\u062c\u0627\u0631\u0627\u062a \u0627\u0644\u0645\u062d\u0635\u0644\u0629',
-    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d subject:\u0643\u0634\u0641 \u0627\u0644\u0627\u064a\u062c\u0627\u0631\u0627\u062a',
+    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d subject:rent',
+    'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d',
   ];
 
-  let latestMsgId = null;
-  let latestDate = null;
-
   for (const q of queries) {
-    const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 5 });
-    for (const msg of (res.data.messages || [])) {
-      const full = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'metadata', metadataHeaders: ['Date'] });
-      const dateHeader = (full.data.payload.headers || []).find(h => h.name === 'Date');
-      const msgDate = dateHeader ? new Date(dateHeader.value) : new Date(0);
-      if (!latestDate || msgDate > latestDate) { latestDate = msgDate; latestMsgId = msg.id; }
+    try {
+      const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 10 });
+      const messages = res.data.messages || [];
+      if (messages.length > 0) {
+        latestMsgId = messages[0].id; // most recent first
+        console.log('[VacancySync] Found ' + messages.length + ' messages, using: ' + latestMsgId);
+        break;
+      }
+    } catch (qErr) {
+      console.error('[VacancySync] Query failed:', qErr.message);
     }
-    if (latestMsgId) break;
   }
 
   if (!latestMsgId) throw new Error('No rent report email found in Gmail');
-  console.log('[VacancySync] Found rent report: ' + latestMsgId + ' from ' + latestDate);
 
   const full = await gmail.users.messages.get({ userId: 'me', id: latestMsgId, format: 'full' });
   const parts = full.data.payload.parts || [];
