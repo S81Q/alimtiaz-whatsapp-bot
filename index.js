@@ -86,76 +86,105 @@ async function syncVacancy() {
 }
 
 async function getVacantUnitsFromGmail() {
-  const { google } = require('googleapis');
   if (!process.env.GMAIL_OAUTH_CLIENT_ID || !process.env.GMAIL_OAUTH_REFRESH_TOKEN) {
     throw new Error('No Gmail OAuth credentials');
   }
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GMAIL_OAUTH_CLIENT_ID,
-    process.env.GMAIL_OAUTH_CLIENT_SECRET,
-    'urn:ietf:wg:oauth:2.0:oob'
-  );
-  oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_OAUTH_REFRESH_TOKEN });
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-  // Search for latest rent report - look for emails with PDF from alamtyaz
-  let latestMsgId = null;
+  // Step 1: Get a fresh access token using the refresh token
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: process.env.GMAIL_OAUTH_CLIENT_ID,
+      client_secret: process.env.GMAIL_OAUTH_CLIENT_SECRET,
+      refresh_token: process.env.GMAIL_OAUTH_REFRESH_TOKEN,
+      grant_type: 'refresh_token'
+    })
+  });
+  const tokenData = await tokenRes.json();
+  if (!tokenData.access_token) {
+    throw new Error('Failed to get access token: ' + JSON.stringify(tokenData));
+  }
+  const accessToken = tokenData.access_token;
+  console.log('[VacancySync] Got fresh access token OK');
 
+  // Step 2: Search for rent report emails from alamtyaz
+  let msgId = null;
   try {
-    const searchRes = await gmail.users.messages.list({
-      userId: 'me',
-      q: 'from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d',
-      maxResults: 20
-    });
-    const messages = (searchRes.data || {}).messages || [];
+    const searchRes = await fetch(
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=' +
+      encodeURIComponent('from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:90d') +
+      '&maxResults=20',
+      { headers: { 'Authorization': 'Bearer ' + accessToken } }
+    );
+    const searchData = await searchRes.json();
+    const messages = searchData.messages || [];
     console.log('[VacancySync] Found ' + messages.length + ' emails from alamtyaz');
 
-    // Find the rent report (has PDF with rent keywords, not expenses)
-    const RENT_KEYWORDS = ['ايجار', 'محصل', 'rent', 'collected'];
-    const EXCLUDE_KEYWORDS = ['مصاريف', 'expenses', 'فاتور', 'invoice', 'صيانة'];
+    const RENT_KEYWORDS = ['\u0627\u064a\u062c\u0627\u0631', '\u0645\u062d\u0635\u0644', 'rent', 'collected'];
+    const EXCLUDE = ['\u0645\u0635\u0627\u0631\u064a\u0641', '\u0641\u0627\u062a\u0648\u0631', 'expense', 'invoice'];
 
     for (const msg of messages) {
-      try {
-        const full = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'metadata', metadataHeaders: ['Subject'] });
-        const subjectHeader = ((full.data || {}).payload || {}).headers || [];
-        const subject = (subjectHeader.find(h => h.name === 'Subject') || {}).value || '';
-        const subjectLower = subject.toLowerCase();
-
-        const hasRent = RENT_KEYWORDS.some(k => subject.includes(k));
-        const isExcluded = EXCLUDE_KEYWORDS.some(k => subject.includes(k));
-
-        if (hasRent && !isExcluded) {
-          latestMsgId = msg.id;
-          console.log('[VacancySync] Selected rent report: ' + subject + ' (' + msg.id + ')');
-          break;
-        }
-      } catch (msgErr) {
-        continue;
+      const mRes = await fetch(
+        'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + msg.id + '?format=metadata&metadataHeaders=Subject',
+        { headers: { 'Authorization': 'Bearer ' + accessToken } }
+      );
+      const mData = await mRes.json();
+      const headers = (mData.payload || {}).headers || [];
+      const subject = (headers.find(h => h.name === 'Subject') || {}).value || '';
+      const hasRent = RENT_KEYWORDS.some(k => subject.includes(k));
+      const excluded = EXCLUDE.some(k => subject.includes(k));
+      if (hasRent && !excluded) {
+        msgId = msg.id;
+        console.log('[VacancySync] Selected: ' + subject + ' (' + msgId + ')');
+        break;
       }
     }
   } catch (searchErr) {
-    console.error('[VacancySync] Search error:', searchErr.message);
+    console.error('[VacancySync] Search failed:', searchErr.message);
   }
 
-  // Fallback to known March 2026 rent report ID
-  if (!latestMsgId) {
-    latestMsgId = '19d483adbc78edbb';
-    console.log('[VacancySync] Using fallback known rent report ID: ' + latestMsgId);
+  // Fallback to known March 2026 rent report
+  if (!msgId) {
+    msgId = '19d483adbc78edbb';
+    console.log('[VacancySync] Using fallback message ID: ' + msgId);
   }
 
-  const full = await gmail.users.messages.get({ userId: 'me', id: latestMsgId, format: 'full' });
-  const parts = full.data.payload.parts || [];
+  // Step 3: Get message and find PDF attachment
+  const fullRes = await fetch(
+    'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + msgId + '?format=full',
+    { headers: { 'Authorization': 'Bearer ' + accessToken } }
+  );
+  const fullData = await fullRes.json();
+  const parts = (fullData.payload || {}).parts || [];
+
   const pdfPart = parts.find(p =>
     p.filename && p.filename.toLowerCase().includes('.pdf') &&
-    !p.filename.includes('\u0627\u064a\u0635\u0627\u0644') && !p.filename.includes('\u0635\u0648\u0631')
+    !p.filename.includes('\u0627\u064a\u0635\u0627\u0644') &&
+    !p.filename.includes('\u0635\u0648\u0631') &&
+    !p.filename.includes('\u0645\u0635\u0627\u0631\u064a\u0641')
   );
 
-  if (!pdfPart || !pdfPart.body.attachmentId) throw new Error('No rent report PDF found');
+  if (!pdfPart || !pdfPart.body || !pdfPart.body.attachmentId) {
+    // Try inline data
+    const inlinePdf = parts.find(p => p.filename && p.filename.toLowerCase().includes('.pdf'));
+    if (!inlinePdf) throw new Error('No PDF found in email ' + msgId + '. Parts: ' + parts.map(p => p.filename).join(', '));
+    console.log('[VacancySync] Found PDF (any): ' + inlinePdf.filename);
+    throw new Error('PDF found but no attachmentId: ' + inlinePdf.filename);
+  }
+
   console.log('[VacancySync] Found PDF: ' + pdfPart.filename);
 
-  const attRes = await gmail.users.attachments.get({ userId: 'me', messageId: latestMsgId, id: pdfPart.body.attachmentId });
-  const pdfBase64 = attRes.data.data.replace(/-/g, '+').replace(/_/g, '/');
+  // Step 4: Download the attachment
+  const attRes = await fetch(
+    'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + msgId + '/attachments/' + pdfPart.body.attachmentId,
+    { headers: { 'Authorization': 'Bearer ' + accessToken } }
+  );
+  const attData = await attRes.json();
+  const pdfBase64 = attData.data.replace(/-/g, '+').replace(/_/g, '/');
+  console.log('[VacancySync] Downloaded PDF (' + pdfBase64.length + ' base64 chars)');
 
+  // Step 5: Send to Claude AI for vacancy analysis
   console.log('[VacancySync] Sending PDF to Claude for analysis...');
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
@@ -177,6 +206,7 @@ async function getVacantUnitsFromGmail() {
   console.log('[VacancySync] Found ' + units.length + ' vacant units');
   return units;
 }
+
 
 async function writeVacancyToSheet(vacantUnits) {
   const sheets = await getGoogleSheets();
