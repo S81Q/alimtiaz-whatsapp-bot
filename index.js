@@ -477,6 +477,16 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// Debug: see exactly what getVacantProperties returns
+app.get('/debug-vacancy', async (req, res) => {
+  try {
+    const props = await getVacantProperties();
+    res.json({ count: props.length, units: props.map(p => p.Unit || p.unit || 'unknown') });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Manual vacancy sync trigger endpoint
 app.post('/sync-vacancy', async (req, res) => {
   try {
