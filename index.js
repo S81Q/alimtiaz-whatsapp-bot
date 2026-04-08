@@ -249,6 +249,7 @@ async function syncVacancyFromSheet() {
 }
 // --- Property Retrieval (filtered by vacancy) ---
 async function getVacantProperties() {
+  sheetsClient = null; // Force fresh auth on every property fetch
   const sheets = await getGoogleSheets();
 
   const [propsResponse, vacancyResponse] = await Promise.all([
