@@ -80,8 +80,8 @@ async function syncVacancy() {
       return { vacant: vacantUnits.length, total: vacantUnits.length, source: 'gmail' };
     }
   } catch (e) {
-    console.error('[VacancySync] Gmail method failed:', e.message);
-    throw e;
+    console.error('[VacancySync] Gmail method failed, falling back to sheet:', e.message);
+    return await syncVacancyFromSheet();
   }
 }
 
