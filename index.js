@@ -480,10 +480,24 @@ app.post('/webhook', async (req, res) => {
 // Debug: see exactly what getVacantProperties returns
 app.get('/debug-vacancy', async (req, res) => {
   try {
+    const sheets = await getGoogleSheets();
+    // Read vacancy sheet raw
+    const vacRes = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Vacancy!A1:E30' }).catch(() => ({data:{values:[]}}));
+    const vacRows = vacRes.data.values || [];
+    // Read properties unit column
+    const propRes = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Properties!A1:B60' });
+    const propRows = propRes.data.values || [];
+    const propUnits = propRows.slice(1).map(r => r[1] || r[0]);
+    // Get filtered properties
     const props = await getVacantProperties();
-    res.json({ count: props.length, units: props.map(p => p.Unit || p.unit || 'unknown') });
+    res.json({
+      vacancySheet: vacRows,
+      propertiesUnits: propUnits.slice(0,20),
+      filteredCount: props.length,
+      filteredUnits: props.map(p => p.Unit)
+    });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0,300) });
   }
 });
 
