@@ -292,7 +292,8 @@ async function getVacantProperties() {
     })
     .filter(prop => {
       const vac = vacancyMap[prop.Unit];
-      if (!vac) return true;
+      // Only show units explicitly marked Vacant in the Vacancy sheet
+      if (!vac) return false;
       return vac.status === 'Vacant' || vac.status === 'Available';
     });
 }
