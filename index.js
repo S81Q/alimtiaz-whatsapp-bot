@@ -403,6 +403,19 @@ app.post('/conversations-webhook', async (req, res) => {
     console.log(`[CONV] ConvSid: ${conversationSid} | From: ${author} | Msg: ${userMessage}`);
 
     const properties = await getVacantProperties();
+
+    // If asking about vacant units, reply directly without going through Claude AI
+    const vacancyKeywords = ['فاضية', 'فاضيه', 'شاغرة', 'شاغره', 'متاحة', 'متاحه', 'vacant', 'available', 'empty', 'فاضي', 'شاغر'];
+    const isVacancyQuestion = vacancyKeywords.some(k => userMessage.toLowerCase().includes(k));
+
+    if (isVacancyQuestion && properties.length > 0) {
+      const unitList = properties.map((p, i) => `${i+1}. ${p.Unit} - ${p.Property_Name}`).join('\n');
+      const directReply = `الوحدات الفاضية حالياً (${properties.length} وحدة):\n\n${unitList}\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389`;
+      await sendWhatsAppReply(conversationSid, directReply);
+      await logLead({ phone, name: collectedName, language: 'ar', question: userMessage, interestedUnit: '', status: 'New' });
+      return;
+    }
+
     const claudeResponse = await askClaude(phone, userMessage, properties);
 
     let parsed;
