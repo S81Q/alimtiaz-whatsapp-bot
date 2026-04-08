@@ -345,6 +345,7 @@ const SYSTEM_PROMPT = `You are a bilingual real estate agent for Al-Imtiaz Wal-J
   👤 نزار: 77851855 Nizar
   👤 أحمد: 55513389 Ahmed
   WhatsApp: +974 7029 7066
+- CRITICAL: If Available Properties list has ANY items, they ARE vacant. List them by Unit and Property_Name even if Rent/Size fields are empty. NEVER say no units available if the list is not empty.
 - Always respond as JSON: {"reply":"...","interested_unit":"...","collected_name":"..."}`;
 
 // Simple in-memory conversation store (keyed by phone number)
