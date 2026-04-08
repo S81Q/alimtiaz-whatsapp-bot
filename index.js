@@ -23,7 +23,7 @@ const logError = (error) => {
 
 // --- Google Sheets Setup ---
 let sheetsClient;
-const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const SHEET_ID = process.env.GOOGLE_SHEET_ID || '1IQzdhv7FcD6XQnJJ61uWUvO_tMoaRquH5GOs7bXwTyQ';
 const CONFIG_SHEET_ID = '1YrwEyeegt-AbxmpJSizTzl_a0Oedg6ooVuZw6Z47XLQ';
 
 // Config cache loaded from Config sheet
@@ -77,7 +77,7 @@ async function syncVacancy() {
   // Read Properties tab
   const propRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: 'Properties!A1:K1000',
+    range: 'Properties!A1:Z1000',
   });
   const propRows = propRes.data.values || [];
   if (propRows.length < 2) {
@@ -148,7 +148,7 @@ async function getVacantProperties() {
   const [propsResponse, vacancyResponse] = await Promise.all([
     sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Properties!A1:K1000',
+      range: 'Properties!A1:Z1000',
     }),
     sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
