@@ -932,6 +932,32 @@ loadConfig().then(() => {
   }, 5000);
 });
 
+
+// TEST: Simulate vacancy bypass to see errors
+app.get('/test-bypass', async (req, res) => {
+  try {
+    const units = cachedVacantUnits.length > 0 ? cachedVacantUnits : (await getVacantProperties());
+    const lines = units.map((u, i) => {
+      const id = (u && (u.unit || u.Unit)) || '?';
+      const name = (u && (u.property || u.Property_Name || u.propertyName)) || '';
+      const rent = (u && u.monthlyRent) ? ' - ' + u.monthlyRent : '';
+      return (i+1) + '. ' + id + (name ? ' - ' + name : '') + rent;
+    });
+    const reply = 'Vacant (' + units.length + '):\n' + lines.join('\n');
+    res.json({ 
+      cacheLen: cachedVacantUnits.length, 
+      propsLen: units.length,
+      hasTwilioSid: !!getConfig('TWILIO_ACCOUNT_SID'),
+      hasTwilioToken: !!getConfig('TWILIO_AUTH_TOKEN'),
+      configKeys: Object.keys(configCache).slice(0,10),
+      envTwilio: !!process.env.TWILIO_ACCOUNT_SID,
+      reply: reply.substring(0, 500)
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0,500) });
+  }
+});
+
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
 });
