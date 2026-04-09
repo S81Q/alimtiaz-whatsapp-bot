@@ -390,6 +390,9 @@ async function askClaude(phone, userMessage, properties) {
 
 // --- Twilio Conversations Webhook (onMessageAdded POST) ---
 app.post('/conversations-webhook', async (req, res) => {
+  // TRACK at very top - before anything else
+  lastWebhookHit = { endpoint: 'conv-webhook-TOP', eventType: req.body.EventType, author: req.body.Author, body: (req.body.Body||'').substring(0,30), participantSid: req.body.ParticipantSid || 'EMPTY', time: new Date().toISOString(), allKeys: Object.keys(req.body).join(',') };
+
   // Respond immediately so Twilio doesn't retry
   res.status(200).send('{}');
 
