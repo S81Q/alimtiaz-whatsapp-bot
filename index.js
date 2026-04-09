@@ -402,6 +402,9 @@ app.post('/conversations-webhook', async (req, res) => {
     const participantSid = req.body.ParticipantSid || '';
     const userMessage = req.body.Body || '';
 
+    // TRACK ALL incoming webhook calls (before any filters)
+    lastWebhookHit = { endpoint: 'conversations-webhook', eventType, author, participantSid: participantSid || 'EMPTY', msg: userMessage?.substring(0,50), convSid: conversationSid, time: new Date().toISOString() };
+
     // Ignore messages sent by the bot itself (no ParticipantSid = system/bot)
     // Bot messages come without a phone number author
     if (!author || author.startsWith('bot') || !userMessage) return;
