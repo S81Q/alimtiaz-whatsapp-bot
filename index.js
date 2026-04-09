@@ -488,6 +488,27 @@ app.post('/webhook', async (req, res) => {
     // Get only vacant/available properties from Google Sheets
     const properties = await getVacantProperties();
 
+    // Vacancy bypass for /webhook path
+    const vacKw2 = ['فاضية', 'فاضيه', 'شاغرة', 'شاغره', 'متاحة', 'متاحه', 'vacant', 'available', 'empty', 'فاضي', 'شاغر'];
+    const isVacQ2 = vacKw2.some(k => incomingMsg.toLowerCase().includes(k));
+    if (isVacQ2) {
+      const units2 = cachedVacantUnits.length > 0 ? cachedVacantUnits : properties;
+      if (units2.length > 0) {
+        const lines2 = units2.map((u, i) => {
+          const id = (u && (u.unit || u.Unit)) || '?';
+          const nm = (u && (u.property || u.Property_Name || u.propertyName)) || '';
+          const rt = (u && u.monthlyRent) ? ' - ' + u.monthlyRent + ' ريال/شهر' : '';
+          return nm ? (i+1) + '. ' + id + ' - ' + nm + rt : (i+1) + '. ' + id + rt;
+        });
+        const vacReply = 'الوحدات الشاغرة حالياً (' + units2.length + ' وحدة):\n\n' + lines2.join('\n') + '\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
+        const twiml2 = new MessagingResponse();
+        twiml2.message(vacReply);
+        res.type('text/xml');
+        return res.send(twiml2.toString());
+      }
+      delete conversations[phone];
+    }
+
     // Ask Claude
     const claudeResponse = await askClaude(phone, incomingMsg, properties);
 
