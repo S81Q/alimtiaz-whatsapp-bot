@@ -354,12 +354,15 @@ const SYSTEM_PROMPT = `You are a bilingual real estate agent for Al-Imtiaz Wal-J
 const conversations = {};
 
 let lastBypassError = null;
+let lastWebhookHit = null;
+let lastClaudeData = null;
 
 // In-memory cache of vacant units (populated by syncVacancy)
 let cachedVacantUnits = [];
 
 async function askClaude(phone, userMessage, properties) {
   const propertyData = JSON.stringify(properties, null, 2);
+  lastClaudeData = { count: properties.length, sample: properties.slice(0,2), phone };
 
   if (!conversations[phone]) {
     conversations[phone] = [];
@@ -407,6 +410,7 @@ app.post('/conversations-webhook', async (req, res) => {
 
     const phone = author.replace('whatsapp:', '').replace(/^\+/, '');
 
+    lastWebhookHit = { endpoint: 'conversations-webhook', author, msg: userMessage, convSid: conversationSid, time: new Date().toISOString() };
     console.log(`[CONV] ConvSid: ${conversationSid} | From: ${author} | Msg: ${userMessage}`);
 
     const properties = await getVacantProperties();
@@ -486,6 +490,7 @@ app.post('/webhook', async (req, res) => {
     const from = req.body.From || '';
     const phone = from.replace('whatsapp:', '');
 
+    lastWebhookHit = { endpoint: 'webhook', phone, msg: incomingMsg, time: new Date().toISOString() };
     console.log(`[MSG-WEBHOOK] From: ${phone} | Message: ${incomingMsg}`);
 
     // Get only vacant/available properties from Google Sheets
@@ -986,7 +991,7 @@ app.get('/test-bypass', async (req, res) => {
 });
 
 app.get('/last-error', (req, res) => {
-  res.json({ lastBypassError: lastBypassError || 'none', cacheLen: cachedVacantUnits.length });
+  res.json({ lastBypassError: lastBypassError || 'none', cacheLen: cachedVacantUnits.length, lastWebhookHit: lastWebhookHit || 'none', lastClaudeData: lastClaudeData || 'none' });
 });
 
 app.get('/', (req, res) => {
