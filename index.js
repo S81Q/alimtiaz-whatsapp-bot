@@ -429,7 +429,7 @@ app.post('/conversations-webhook', async (req, res) => {
           const reply = 'الوحدات الشاغرة حالياً (' + units.length + ' وحدة):\n\n' + lines.join('\n') + '\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
           const bypassTwilio = twilio(getConfig('TWILIO_ACCOUNT_SID'), getConfig('TWILIO_AUTH_TOKEN'));
           await bypassTwilio.conversations.v1.conversations(conversationSid).messages.create({ body: reply });
-          await logLead({ phone, name: collectedName, language: 'ar', question: userMessage, interestedUnit: '', status: 'New' });
+          await logLead({ phone, name: '', language: 'ar', question: userMessage, interestedUnit: '', status: 'New' });
           return;
         }
       } catch(bypassErr) {
