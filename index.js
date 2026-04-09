@@ -414,19 +414,25 @@ app.post('/conversations-webhook', async (req, res) => {
     const isVacancyQuestion = vacancyKeywords.some(k => userMessage.toLowerCase().includes(k));
 
     if (isVacancyQuestion) {
-      const units = cachedVacantUnits.length > 0 ? cachedVacantUnits : properties;
-      console.log('[CONV] Vacancy question. cachedVacantUnits:', cachedVacantUnits.length, 'properties:', properties.length);
-      if (units.length > 0) {
-        const unitList = units.map((u, i) => {
-          const name = typeof u === 'object' ? (u.property || u.Property_Name || u.propertyName || '') : '';
-          const id = typeof u === 'object' ? (u.unit || u.Unit || '') : (u || '');
-          const rent = typeof u === 'object' && u.monthlyRent ? ' - ' + u.monthlyRent + ' ريال/شهر' : '';
-          return name ? `${i+1}. ${id} - ${name}${rent}` : `${i+1}. ${id}${rent}`;
-        }).join('\n');
-        const directReply = `الوحدات الشاغرة حالياً (${units.length} وحدة):\n\n${unitList}\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389`;
-        await client.conversations.v1.conversations(conversationSid).messages.create({ body: directReply });
-        await logLead({ phone, name: collectedName, language: 'ar', question: userMessage, interestedUnit: '', status: 'New' });
-        return;
+      try {
+        const units = cachedVacantUnits.length > 0 ? cachedVacantUnits : properties;
+        console.log('[CONV] Vacancy bypass. cache:', cachedVacantUnits.length, 'props:', properties.length);
+        if (units.length > 0) {
+          const lines = units.map((u, i) => {
+            try {
+              const id = (u && (u.unit || u.Unit)) || String(u) || '?';
+              const name = (u && (u.property || u.Property_Name || u.propertyName)) || '';
+              const rent = (u && u.monthlyRent) ? ' - ' + u.monthlyRent + ' ريال/شهر' : '';
+              return name ? (i+1) + '. ' + id + ' - ' + name + rent : (i+1) + '. ' + id + rent;
+            } catch(e) { return (i+1) + '. وحدة شاغرة'; }
+          });
+          const reply = 'الوحدات الشاغرة حالياً (' + units.length + ' وحدة):\n\n' + lines.join('\n') + '\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
+          await client.conversations.v1.conversations(conversationSid).messages.create({ body: reply });
+          await logLead({ phone, name: collectedName, language: 'ar', question: userMessage, interestedUnit: '', status: 'New' });
+          return;
+        }
+      } catch(bypassErr) {
+        console.error('[CONV] Bypass error:', bypassErr.message);
       }
     }
 
