@@ -76,6 +76,8 @@ async function syncVacancy() {
     const vacantUnits = await getVacantUnitsFromGmail();
     if (vacantUnits && vacantUnits.length > 0) {
       await writeVacancyToSheet(vacantUnits);
+  cachedVacantUnits = vacantUnits; // Cache in memory for instant access
+  console.log('[VacancySync] Cached', vacantUnits.length, 'vacant units in memory');
       console.log('[VacancySync] Done: ' + vacantUnits.length + ' vacant units from Gmail');
       return { vacant: vacantUnits.length, total: vacantUnits.length, source: 'gmail' };
     }
@@ -351,6 +353,9 @@ const SYSTEM_PROMPT = `You are a bilingual real estate agent for Al-Imtiaz Wal-J
 // Simple in-memory conversation store (keyed by phone number)
 const conversations = {};
 
+// In-memory cache of vacant units (populated by syncVacancy)
+let cachedVacantUnits = [];
+
 async function askClaude(phone, userMessage, properties) {
   const propertyData = JSON.stringify(properties, null, 2);
 
@@ -404,16 +409,24 @@ app.post('/conversations-webhook', async (req, res) => {
 
     const properties = await getVacantProperties();
 
-    // If asking about vacant units, reply directly without going through Claude AI
+    // If asking about vacant units, reply directly using cached data (no sheet read needed)
     const vacancyKeywords = ['فاضية', 'فاضيه', 'شاغرة', 'شاغره', 'متاحة', 'متاحه', 'vacant', 'available', 'empty', 'فاضي', 'شاغر'];
     const isVacancyQuestion = vacancyKeywords.some(k => userMessage.toLowerCase().includes(k));
 
-    if (isVacancyQuestion && properties.length > 0) {
-      const unitList = properties.map((p, i) => `${i+1}. ${p.Unit} - ${p.Property_Name}`).join('\n');
-      const directReply = `الوحدات الفاضية حالياً (${properties.length} وحدة):\n\n${unitList}\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389`;
-      await client.conversations.v1.conversations(conversationSid).messages.create({ body: directReply });
-      await logLead({ phone, name: collectedName, language: 'ar', question: userMessage, interestedUnit: '', status: 'New' });
-      return;
+    if (isVacancyQuestion) {
+      const units = cachedVacantUnits.length > 0 ? cachedVacantUnits : properties;
+      console.log('[CONV] Vacancy question. cachedVacantUnits:', cachedVacantUnits.length, 'properties:', properties.length);
+      if (units.length > 0) {
+        const unitList = units.map((u, i) => {
+          const name = typeof u === 'object' ? (u.Property_Name || u.propertyName || '') : '';
+          const id = typeof u === 'object' ? (u.Unit || u.unit || '') : (u || '');
+          return name ? `${i+1}. ${id} - ${name}` : `${i+1}. ${id}`;
+        }).join('\n');
+        const directReply = `الوحدات الشاغرة حالياً (${units.length} وحدة):\n\n${unitList}\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389`;
+        await client.conversations.v1.conversations(conversationSid).messages.create({ body: directReply });
+        await logLead({ phone, name: collectedName, language: 'ar', question: userMessage, interestedUnit: '', status: 'New' });
+        return;
+      }
     }
 
     const claudeResponse = await askClaude(phone, userMessage, properties);
