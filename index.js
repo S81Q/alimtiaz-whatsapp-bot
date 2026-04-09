@@ -486,7 +486,7 @@ app.post('/webhook', async (req, res) => {
     const from = req.body.From || '';
     const phone = from.replace('whatsapp:', '');
 
-    console.log(`[MSG] From: ${phone} | Message: ${incomingMsg}`);
+    console.log(`[MSG-WEBHOOK] From: ${phone} | Message: ${incomingMsg}`);
 
     // Get only vacant/available properties from Google Sheets
     const properties = await getVacantProperties();
