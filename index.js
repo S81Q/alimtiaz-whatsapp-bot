@@ -418,9 +418,10 @@ app.post('/conversations-webhook', async (req, res) => {
       console.log('[CONV] Vacancy question. cachedVacantUnits:', cachedVacantUnits.length, 'properties:', properties.length);
       if (units.length > 0) {
         const unitList = units.map((u, i) => {
-          const name = typeof u === 'object' ? (u.Property_Name || u.propertyName || '') : '';
-          const id = typeof u === 'object' ? (u.Unit || u.unit || '') : (u || '');
-          return name ? `${i+1}. ${id} - ${name}` : `${i+1}. ${id}`;
+          const name = typeof u === 'object' ? (u.property || u.Property_Name || u.propertyName || '') : '';
+          const id = typeof u === 'object' ? (u.unit || u.Unit || '') : (u || '');
+          const rent = typeof u === 'object' && u.monthlyRent ? ' - ' + u.monthlyRent + ' ريال/شهر' : '';
+          return name ? `${i+1}. ${id} - ${name}${rent}` : `${i+1}. ${id}${rent}`;
         }).join('\n');
         const directReply = `الوحدات الشاغرة حالياً (${units.length} وحدة):\n\n${unitList}\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389`;
         await client.conversations.v1.conversations(conversationSid).messages.create({ body: directReply });
