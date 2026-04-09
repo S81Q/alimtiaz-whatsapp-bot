@@ -993,6 +993,36 @@ app.get('/test-bypass', async (req, res) => {
   }
 });
 
+
+app.get('/check-twilio-webhooks', async (req, res) => {
+  try {
+    const sid = getConfig('TWILIO_ACCOUNT_SID');
+    const token = getConfig('TWILIO_AUTH_TOKEN');
+    const auth = Buffer.from(sid + ':' + token).toString('base64');
+    const headers = { 'Authorization': 'Basic ' + auth };
+    
+    // Check Conversations service config
+    const convRes = await fetch('https://conversations.twilio.com/v1/Configuration', { headers });
+    const convData = await convRes.json();
+    
+    // Check Conversations webhooks
+    const whRes = await fetch('https://conversations.twilio.com/v1/Configuration/Webhooks', { headers });
+    const whData = await whRes.json();
+    
+    // List conversation services
+    const svcRes = await fetch('https://conversations.twilio.com/v1/Services?PageSize=5', { headers });
+    const svcData = await svcRes.json();
+    
+    res.json({ 
+      defaultService: convData.default_conversation_service_sid,
+      webhooks: whData,
+      services: svcData.services?.map(s => ({ sid: s.sid, name: s.friendly_name })) || []
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/last-error', (req, res) => {
   res.json({ lastBypassError: lastBypassError || 'none', cacheLen: cachedVacantUnits.length, lastWebhookHit: lastWebhookHit || 'none', lastClaudeData: lastClaudeData || 'none' });
 });
