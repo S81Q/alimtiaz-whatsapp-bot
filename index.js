@@ -512,6 +512,9 @@ app.post('/webhook', async (req, res) => {
       delete conversations[phone];
     }
 
+    // Always clear conversation history for fresh Claude response
+    delete conversations[phone];
+
     // Ask Claude
     const claudeResponse = await askClaude(phone, incomingMsg, properties);
 
