@@ -1431,7 +1431,7 @@ app.get('/post-vacant', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', version: 'v3-ad-poster' });
+  res.json({ status: 'healthy', version: 'v3-ad-poster', commit: '23426c0', cache: cachedVacantUnits.length });
 });
 
 const PORT = process.env.PORT || 3000;
