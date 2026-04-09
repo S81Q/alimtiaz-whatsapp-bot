@@ -353,6 +353,8 @@ const SYSTEM_PROMPT = `You are a bilingual real estate agent for Al-Imtiaz Wal-J
 // Simple in-memory conversation store (keyed by phone number)
 const conversations = {};
 
+let lastBypassError = null;
+
 // In-memory cache of vacant units (populated by syncVacancy)
 let cachedVacantUnits = [];
 
@@ -433,6 +435,7 @@ app.post('/conversations-webhook', async (req, res) => {
           return;
         }
       } catch(bypassErr) {
+        lastBypassError = { msg: bypassErr.message, stack: bypassErr.stack ? bypassErr.stack.substring(0,500) : '', time: new Date().toISOString() };
         console.error('[CONV] Bypass error:', bypassErr.message);
       }
     }
@@ -977,6 +980,10 @@ app.get('/test-bypass', async (req, res) => {
   } catch(e) {
     res.status(500).json({ error: e.message, stack: e.stack?.substring(0,500) });
   }
+});
+
+app.get('/last-error', (req, res) => {
+  res.json({ lastBypassError: lastBypassError || 'none', cacheLen: cachedVacantUnits.length });
 });
 
 app.get('/', (req, res) => {
