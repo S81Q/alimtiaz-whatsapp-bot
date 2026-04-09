@@ -437,6 +437,9 @@ app.post('/conversations-webhook', async (req, res) => {
       }
     }
 
+    // Clear old conversation history for vacancy questions so Claude sees fresh data
+    if (isVacancyQuestion) { delete conversations[phone]; }
+
     const claudeResponse = await askClaude(phone, userMessage, properties);
 
     let parsed;
@@ -922,6 +925,13 @@ app.get('/test-gmail', async (req, res) => {
 });
 
 // Health check endpoint
+// Auto-sync vacancy on startup so cache is always populated
+loadConfig().then(() => {
+  setTimeout(() => {
+    syncVacancy().then(r => console.log('[Startup] Vacancy synced:', r)).catch(e => console.error('[Startup] Sync failed:', e.message));
+  }, 5000);
+});
+
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Al-Imtiaz WhatsApp Bot', timestamp: new Date().toISOString() });
 });
