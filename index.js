@@ -381,6 +381,18 @@ let lastClaudeData = null;
 
 // In-memory cache of vacant units (populated by syncVacancy)
 let cachedVacantUnits = [];
+// Quick startup: read vacancy from Sheet immediately (Gmail sync runs later)
+(async () => {
+  try {
+    const quickUnits = await getVacantProperties();
+    if (quickUnits && quickUnits.length > 0 && cachedVacantUnits.length === 0) {
+      cachedVacantUnits = quickUnits;
+      let pLines = quickUnits.map((u, i) => (i+1) + '. ' + (u.Unit || u.unit || '?') + (u.Property_Name || u.property ? ' - ' + (u.Property_Name || u.property) : '') + (u.Rent_QAR || u.monthlyRent ? ' (' + (u.Rent_QAR || u.monthlyRent) + ' QAR)' : ''));
+      persistentVacancyPrompt = '\n\n=== CONFIRMED VACANT UNITS (' + quickUnits.length + ') ===\n' + pLines.join('\n') + '\n=== YOU MUST LIST THESE WHEN ASKED ===';
+      console.log('[QuickStart] Loaded ' + quickUnits.length + ' units from Sheet at startup');
+    }
+  } catch(e) { console.log('[QuickStart] Sheet read failed, will retry via Gmail sync:', e.message); }
+})();
 let persistentVacancyPrompt = ''; // Always included in Claude's system prompt
 
 async function askClaude(phone, userMessage, properties) {
