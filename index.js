@@ -537,6 +537,8 @@ app.post('/conversations-webhook', async (req, res) => {
 
 // --- Twilio WhatsApp Webhook ---
 app.post('/webhook', async (req, res) => {
+  console.log('[WEBHOOK HIT] Body keys:', Object.keys(req.body || {}), 'From:', req.body.From, 'Body:', (req.body.Body || '').substring(0, 50));
+  lastRequest = { path: '/webhook', method: 'POST', bodyKeys: Object.keys(req.body || {}), time: new Date().toISOString() };
   try {
     const incomingMsg = req.body.Body || '';
     const from = req.body.From || '';
