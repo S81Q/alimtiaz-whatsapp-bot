@@ -1109,6 +1109,17 @@ app.get('/test-gmail', async (req, res) => {
   }
 });
 
+// --- Test Meta Token ---
+app.get('/test-meta-token', async (req, res) => {
+  try {
+    const metaToken = getConfig('META_ACCESS_TOKEN');
+    const phoneId = getConfig('META_PHONE_NUMBER_ID') || '1105443759309335';
+    const r = await fetch('https://graph.facebook.com/v18.0/' + phoneId + '?access_token=' + metaToken);
+    const d = await r.json();
+    res.json({ tokenLen: metaToken.length, tokenStart: metaToken.substring(0,10), phoneId, metaResponse: d });
+  } catch(e) { res.json({ error: e.message }); }
+});
+
 // --- Meta Cloud API Webhook (handles WhatsApp Business +974 7029 7066) ---
 app.get('/meta-webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -1121,6 +1132,7 @@ app.post('/meta-webhook', async (req, res) => {
   res.sendStatus(200);
   try {
     const body = req.body;
+    try { require('fs').appendFileSync('/tmp/webhook.log', new Date().toISOString() + ' | META-WH | OBJ:' + (body.object||'?') + ' | KEYS:' + JSON.stringify(Object.keys(body)) + '\n'); } catch(e) {}
     if (body.object !== 'whatsapp_business_account') return;
     const entry = body.entry && body.entry[0];
     const changes = entry && entry.changes && entry.changes[0];
