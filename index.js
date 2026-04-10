@@ -1108,6 +1108,22 @@ app.get('/check-service-webhooks', async (req, res) => {
   }
 });
 
+app.get('/simulate-vacancy', async (req, res) => {
+  try {
+    const properties = await getVacantProperties();
+    delete conversations['simulate'];
+    const claudeResponse = await askClaude('simulate', 'what are the vacant units available', properties);
+    res.json({ 
+      propsCount: properties.length,
+      cacheCount: cachedVacantUnits.length,
+      promptLen: persistentVacancyPrompt.length,
+      claudeResponse: claudeResponse.substring(0, 500)
+    });
+  } catch(e) {
+    res.json({ error: e.message, stack: e.stack?.substring(0,300) });
+  }
+});
+
 app.get('/last-error', (req, res) => {
   res.json({ lastBypassError: lastBypassError || 'none', cacheLen: cachedVacantUnits.length, lastWebhookHit: lastWebhookHit || 'none', lastClaudeData: lastClaudeData || 'none' });
 });
