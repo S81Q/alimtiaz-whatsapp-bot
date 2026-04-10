@@ -1110,6 +1110,22 @@ app.get('/check-service-webhooks', async (req, res) => {
 
 
 
+app.get('/reset-webhook', async (req, res) => {
+  try {
+    const sid = getConfig('TWILIO_ACCOUNT_SID');
+    const token = getConfig('TWILIO_AUTH_TOKEN');
+    const auth = Buffer.from(sid + ':' + token).toString('base64');
+    const webhookUrl = 'https://alimtiaz-whatsapp-bot-production.up.railway.app/conversations-webhook';
+    const r = await fetch('https://conversations.twilio.com/v1/Configuration/Webhooks', {
+      method: 'POST',
+      headers: { 'Authorization': 'Basic ' + auth, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'PostWebhookUrl=' + encodeURIComponent(webhookUrl) + '&PreWebhookUrl=' + encodeURIComponent(webhookUrl) + '&Filters=onMessageAdded&Method=POST&Target=webhook'
+    });
+    const data = await r.json();
+    res.json({ status: 'reset', result: data });
+  } catch(e) { res.json({ error: e.message }); }
+});
+
 app.get('/check-sandbox', async (req, res) => {
   try {
     const sid = getConfig('TWILIO_ACCOUNT_SID');
