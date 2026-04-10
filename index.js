@@ -1152,6 +1152,31 @@ app.post('/meta-webhook', async (req, res) => {
   } catch (e) { logError(e); }
 });
 
+// --- Update Meta Webhook URL programmatically ---
+app.get('/update-meta-webhook', async (req, res) => {
+  try {
+    const appId = '942982665316556';
+    const callbackUrl = 'https://alimtiaz-whatsapp-bot-production.up.railway.app/meta-webhook';
+    const verifyToken = 'alimtiaz123';
+    const metaToken = getConfig('META_ACCESS_TOKEN');
+    
+    // Subscribe webhook using Graph API
+    const subRes = await fetch('https://graph.facebook.com/v18.0/' + appId + '/subscriptions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        object: 'whatsapp_business_account',
+        callback_url: callbackUrl,
+        verify_token: verifyToken,
+        fields: 'messages',
+        access_token: metaToken
+      })
+    });
+    const subData = await subRes.json();
+    res.json({ status: 'done', response: subData, callbackUrl, verifyToken });
+  } catch(e) { res.json({ error: e.message }); }
+});
+
 // Health check endpoint
 // Auto-sync vacancy on startup so cache is always populated
 loadConfig().then(() => {
