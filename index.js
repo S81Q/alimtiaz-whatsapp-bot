@@ -448,6 +448,8 @@ async function askClaude(phone, userMessage, properties) {
 
 // --- Twilio Conversations Webhook (onMessageAdded POST) ---
 app.post('/conversations-webhook', async (req, res) => {
+  console.log('[CONV-WEBHOOK HIT] Keys:', Object.keys(req.body || {}));
+  try { require('fs').appendFileSync('/tmp/webhook.log', new Date().toISOString() + ' | CONV | KEYS:' + Object.keys(req.body||{}).join(',') + ' | EVT:' + (req.body.EventType||'?') + ' | AUTH:' + (req.body.Author||'?') + '\n'); } catch(e) {}
   // TRACK at very top - before anything else
   lastWebhookHit = { endpoint: 'conv-webhook-TOP', eventType: req.body.EventType, author: req.body.Author, body: (req.body.Body||'').substring(0,30), participantSid: req.body.ParticipantSid || 'EMPTY', time: new Date().toISOString(), allKeys: Object.keys(req.body).join(',') };
 
@@ -1862,6 +1864,14 @@ app.get('/post-vacant', async (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', version: 'v3-ad-poster', commit: '23426c0', cache: cachedVacantUnits.length });
+});
+
+// CATCH-ALL: Log ANY unmatched POST
+app.post('*', (req, res) => {
+  const log = new Date().toISOString() + ' | UNMATCHED | PATH:' + req.path + ' | KEYS:' + Object.keys(req.body||{}).join(',') + '\n';
+  console.log('[UNMATCHED POST]', req.path);
+  try { require('fs').appendFileSync('/tmp/webhook.log', log); } catch(e) {}
+  res.status(200).send('ok');
 });
 
 const PORT = process.env.PORT || 3000;
