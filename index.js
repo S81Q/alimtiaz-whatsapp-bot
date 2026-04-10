@@ -1109,6 +1109,41 @@ app.get('/check-service-webhooks', async (req, res) => {
 });
 
 
+
+app.get('/check-twilio-full', async (req, res) => {
+  try {
+    const sid = getConfig('TWILIO_ACCOUNT_SID');
+    const token = getConfig('TWILIO_AUTH_TOKEN');
+    const auth = Buffer.from(sid + ':' + token).toString('base64');
+    const h = { 'Authorization': 'Basic ' + auth };
+    
+    // Check messaging services
+    const msRes = await fetch('https://messaging.twilio.com/v1/Services?PageSize=5', { headers: h });
+    const msData = await msRes.json();
+    
+    // Check Studio Flows
+    const sfRes = await fetch('https://studio.twilio.com/v2/Flows?PageSize=5', { headers: h });
+    const sfData = await sfRes.json();
+    
+    // Check incoming phone numbers (sandbox)
+    const pnRes = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + sid + '/IncomingPhoneNumbers.json?PageSize=5', { headers: h });
+    const pnData = await pnRes.json();
+    
+    // Check WhatsApp senders
+    const wsRes = await fetch('https://messaging.twilio.com/v1/Senders/whatsapp?PageSize=5', { headers: h }).catch(e => ({ json: async () => ({error: e.message}) }));
+    const wsData = await wsRes.json();
+    
+    res.json({
+      messagingServices: msData.services?.map(s => ({ sid: s.sid, name: s.friendly_name, webhook: s.status_callback })) || [],
+      studioFlows: sfData.flows?.map(f => ({ sid: f.sid, name: f.friendly_name, status: f.status })) || [],
+      phoneNumbers: pnData.incoming_phone_numbers?.map(p => ({ number: p.phone_number, smsUrl: p.sms_url, voiceUrl: p.voice_url })) || [],
+      whatsappSenders: wsData
+    });
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
 app.get('/show-config', (req, res) => {
   const keys = Object.keys(configCache);
   const safe = {};
