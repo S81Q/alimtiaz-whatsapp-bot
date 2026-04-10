@@ -378,6 +378,19 @@ let cachedVacantUnits = [];
 
 async function askClaude(phone, userMessage, properties) {
   const propertyData = JSON.stringify(properties, null, 2);
+  
+  // Build a plain-text vacancy summary that Claude cannot miss
+  let vacancySummary = '';
+  if (properties && properties.length > 0) {
+    vacancySummary = '\n\n=== VACANCY LIST (CONFIRMED ' + properties.length + ' VACANT UNITS) ===\n';
+    properties.forEach((p, i) => {
+      const unit = p.Unit || p.unit || '?';
+      const name = p.Property_Name || p.property || '';
+      const rent = p.Rent_QAR || p.monthlyRent || '';
+      vacancySummary += (i+1) + '. Unit ' + unit + (name ? ' - ' + name : '') + (rent ? ' - Rent: ' + rent + ' QAR/month' : '') + '\n';
+    });
+    vacancySummary += '=== END OF VACANCY LIST ===\nIMPORTANT: The above ' + properties.length + ' units ARE vacant and available. You MUST list them when asked about vacant/available units.';
+  }
   lastClaudeData = { count: properties.length, sample: properties.slice(0,2), phone };
 
   if (!conversations[phone]) {
@@ -394,7 +407,7 @@ async function askClaude(phone, userMessage, properties) {
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1024,
-    system: `${SYSTEM_PROMPT}\n\nAvailable Properties:\n${propertyData}`,
+    system: `${SYSTEM_PROMPT}\n\nAvailable Properties:\n${propertyData}${vacancySummary}`,
     messages: conversations[phone],
   });
 
