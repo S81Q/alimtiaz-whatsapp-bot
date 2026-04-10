@@ -93,6 +93,12 @@ async function syncVacancy() {
     if (vacantUnits && vacantUnits.length > 0) {
       await writeVacancyToSheet(vacantUnits);
   cachedVacantUnits = vacantUnits; // Cache in memory for instant access
+  // Build persistent vacancy prompt
+  if (vacantUnits.length > 0) {
+    let pLines = vacantUnits.map((u, i) => (i+1) + '. ' + (u.unit||'?') + (u.property ? ' - ' + u.property : '') + (u.monthlyRent ? ' (' + u.monthlyRent + ' QAR)' : ''));
+    persistentVacancyPrompt = '\n\n=== CONFIRMED VACANT UNITS (' + vacantUnits.length + ') ===\n' + pLines.join('\n') + '\n=== YOU MUST LIST THESE WHEN ASKED ===';
+    console.log('[VacancySync] Built persistent prompt with ' + vacantUnits.length + ' units');
+  }
   console.log('[VacancySync] Cached', vacantUnits.length, 'vacant units in memory');
       console.log('[VacancySync] Done: ' + vacantUnits.length + ' vacant units from Gmail');
       return { vacant: vacantUnits.length, total: vacantUnits.length, source: 'gmail' };
