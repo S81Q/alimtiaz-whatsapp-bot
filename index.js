@@ -551,6 +551,8 @@ app.post('/conversations-webhook', async (req, res) => {
 app.post('/webhook', async (req, res) => {
   console.log('[WEBHOOK HIT] Body keys:', Object.keys(req.body || {}), 'From:', req.body.From, 'Body:', (req.body.Body || '').substring(0, 50));
   lastRequest = { path: '/webhook', method: 'POST', bodyKeys: Object.keys(req.body || {}), time: new Date().toISOString() };
+  // File-based log that survives restarts
+  try { require('fs').appendFileSync('/tmp/webhook.log', new Date().toISOString() + ' | FROM:' + (req.body.From||'?') + ' | MSG:' + (req.body.Body||'').substring(0,50) + '\n'); } catch(e) {}
   try {
     const incomingMsg = req.body.Body || '';
     const from = req.body.From || '';
@@ -1335,6 +1337,9 @@ app.get('/check-address-config', async (req, res) => {
   } catch(e) { res.json({ error: e.message }); }
 });
 
+app.get('/webhook-log', (req, res) => {
+  try { res.send(require('fs').readFileSync('/tmp/webhook.log', 'utf8')); } catch(e) { res.send('No webhook log yet'); }
+});
 app.get('/last-error', (req, res) => {
   res.json({ lastBypassError: lastBypassError || 'none', cacheLen: cachedVacantUnits.length, lastWebhookHit: lastWebhookHit || 'none', lastClaudeData: lastClaudeData || 'none' });
 });
