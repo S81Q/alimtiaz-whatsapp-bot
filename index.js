@@ -384,6 +384,16 @@ let cachedVacantUnits = [];
 let persistentVacancyPrompt = ''; // Always included in Claude's system prompt
 
 async function askClaude(phone, userMessage, properties) {
+  // If properties empty but we have cached data, use that instead
+  if ((!properties || properties.length === 0) && cachedVacantUnits.length > 0) {
+    properties = cachedVacantUnits.map(u => ({
+      Unit: u.unit || u.Unit || '',
+      Property_Name: u.property || u.Property_Name || '',
+      Rent_QAR: u.monthlyRent || u.Rent_QAR || '',
+      Status: 'Vacant'
+    }));
+    console.log('[askClaude] Using cached units as fallback:', properties.length);
+  }
   const propertyData = JSON.stringify(properties, null, 2);
   
   // Build a plain-text vacancy summary that Claude cannot miss
