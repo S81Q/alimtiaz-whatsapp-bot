@@ -1210,6 +1210,34 @@ app.get('/simulate-vacancy', async (req, res) => {
   }
 });
 
+
+app.get('/check-address-config', async (req, res) => {
+  try {
+    const sid = getConfig('TWILIO_ACCOUNT_SID');
+    const token = getConfig('TWILIO_AUTH_TOKEN');
+    const auth = Buffer.from(sid + ':' + token).toString('base64');
+    const headers = { 'Authorization': 'Basic ' + auth };
+    
+    // Check address configurations (maps WhatsApp numbers to Conversations)
+    const addrRes = await fetch('https://conversations.twilio.com/v1/Configuration/Addresses?PageSize=20', { headers });
+    const addrData = await addrRes.json();
+    
+    // Check conversation participants to find WhatsApp conversations  
+    const convRes = await fetch('https://conversations.twilio.com/v1/Conversations?PageSize=5', { headers });
+    const convData = await convRes.json();
+    
+    // Check webhooks on default service
+    const whRes = await fetch('https://conversations.twilio.com/v1/Configuration/Webhooks', { headers });
+    const whData = await whRes.json();
+    
+    res.json({
+      addresses: addrData,
+      conversations: convData.conversations?.map(c => ({ sid: c.sid, state: c.state, friendlyName: c.friendly_name, messagingServiceSid: c.messaging_service_sid })),
+      webhooks: whData
+    });
+  } catch(e) { res.json({ error: e.message }); }
+});
+
 app.get('/last-error', (req, res) => {
   res.json({ lastBypassError: lastBypassError || 'none', cacheLen: cachedVacantUnits.length, lastWebhookHit: lastWebhookHit || 'none', lastClaudeData: lastClaudeData || 'none' });
 });
