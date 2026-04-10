@@ -1108,6 +1108,25 @@ app.get('/check-service-webhooks', async (req, res) => {
   }
 });
 
+
+app.get('/show-config', (req, res) => {
+  const keys = Object.keys(configCache);
+  const safe = {};
+  keys.forEach(k => {
+    const v = configCache[k] || '';
+    // Show URLs fully, mask tokens/secrets
+    if (k.includes('URL') || k.includes('WEBHOOK') || k.includes('NUMBER') || k.includes('NAME') || k.includes('RESULTS') || k.includes('MESSAGE')) {
+      safe[k] = v;
+    } else {
+      safe[k] = v.substring(0, 6) + '***';
+    }
+  });
+  // Also check env vars
+  safe['ENV_DIALOG360_URL'] = process.env.DIALOG360_URL || 'not set';
+  safe['ENV_META_WEBHOOK'] = process.env.META_WEBHOOK_URL || 'not set';
+  res.json(safe);
+});
+
 app.get('/simulate-vacancy', async (req, res) => {
   try {
     const properties = await getVacantProperties();
