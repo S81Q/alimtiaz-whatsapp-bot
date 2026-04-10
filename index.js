@@ -1109,85 +1109,9 @@ app.get('/test-gmail', async (req, res) => {
   }
 });
 
-// --- Test Meta Token ---
-app.get('/test-meta-token', async (req, res) => {
-  try {
-    const metaToken = getConfig('META_ACCESS_TOKEN');
-    const phoneId = getConfig('META_PHONE_NUMBER_ID') || '1105443759309335';
-    const r = await fetch('https://graph.facebook.com/v18.0/' + phoneId + '?access_token=' + metaToken);
-    const d = await r.json();
-    res.json({ tokenLen: metaToken.length, tokenStart: metaToken.substring(0,10), phoneId, metaResponse: d });
-  } catch(e) { res.json({ error: e.message }); }
-});
 
-// --- Meta Cloud API Webhook (handles WhatsApp Business +974 7029 7066) ---
-app.get('/meta-webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const challenge = req.query['hub.challenge'];
-  if (mode === 'subscribe' && challenge) return res.status(200).send(challenge);
-  res.sendStatus(403);
-});
 
-app.post('/meta-webhook', async (req, res) => {
-  res.sendStatus(200);
-  try {
-    const body = req.body;
-    try { require('fs').appendFileSync('/tmp/webhook.log', new Date().toISOString() + ' | META-WH | OBJ:' + (body.object||'?') + ' | KEYS:' + JSON.stringify(Object.keys(body)) + '\n'); } catch(e) {}
-    if (body.object !== 'whatsapp_business_account') return;
-    const entry = body.entry && body.entry[0];
-    const changes = entry && entry.changes && entry.changes[0];
-    const value = changes && changes.value;
-    if (!value || !value.messages) return;
-    const msg = value.messages[0];
-    if (!msg || msg.type !== 'text') return;
-    const phone = msg.from;
-    const userMessage = msg.text.body;
-    const phoneNumberId = value.metadata.phone_number_id;
-    console.log('[Meta] Message from ' + phone + ': ' + userMessage);
-    const properties = await getVacantProperties();
-    const claudeResponse = await askClaude(phone, userMessage, properties);
-    let replyText;
-    try {
-      const parsed = JSON.parse(claudeResponse.match(/\{[\s\S]*\}/)[0]);
-      replyText = parsed.reply || claudeResponse;
-    } catch { replyText = claudeResponse; }
-    const metaToken = getConfig('META_ACCESS_TOKEN');
-    const metaPhoneId = getConfig('META_PHONE_NUMBER_ID') || phoneNumberId;
-    await fetch('https://graph.facebook.com/v18.0/' + metaPhoneId + '/messages', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + metaToken, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messaging_product: 'whatsapp', to: phone, type: 'text', text: { body: replyText } })
-    });
-    const isArabic = /[\u0600-\u06FF]/.test(userMessage);
-    await logLead({ phone, name: '', language: isArabic ? 'Arabic' : 'English', question: userMessage, interestedUnit: '', status: 'New' });
-    console.log('[Meta] Reply sent to ' + phone);
-  } catch (e) { logError(e); }
-});
 
-// --- Update Meta Webhook URL programmatically ---
-app.get('/update-meta-webhook', async (req, res) => {
-  try {
-    const appId = '942982665316556';
-    const callbackUrl = 'https://alimtiaz-whatsapp-bot-production.up.railway.app/meta-webhook';
-    const verifyToken = 'alimtiaz123';
-    const metaToken = getConfig('META_ACCESS_TOKEN');
-    
-    // Subscribe webhook using Graph API
-    const subRes = await fetch('https://graph.facebook.com/v18.0/' + appId + '/subscriptions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        object: 'whatsapp_business_account',
-        callback_url: callbackUrl,
-        verify_token: verifyToken,
-        fields: 'messages',
-        access_token: metaToken
-      })
-    });
-    const subData = await subRes.json();
-    res.json({ status: 'done', response: subData, callbackUrl, verifyToken });
-  } catch(e) { res.json({ error: e.message }); }
-});
 
 // Health check endpoint
 // Auto-sync vacancy on startup so cache is always populated
