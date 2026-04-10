@@ -1062,6 +1062,42 @@ app.get('/check-twilio-webhooks', async (req, res) => {
   }
 });
 
+
+app.get('/check-service-webhooks', async (req, res) => {
+  try {
+    const sid = getConfig('TWILIO_ACCOUNT_SID');
+    const token = getConfig('TWILIO_AUTH_TOKEN');
+    const auth = Buffer.from(sid + ':' + token).toString('base64');
+    const headers = { 'Authorization': 'Basic ' + auth };
+    
+    // Get default service
+    const confRes = await fetch('https://conversations.twilio.com/v1/Configuration', { headers });
+    const confData = await confRes.json();
+    const defaultSvc = confData.default_conversation_service_sid;
+    
+    // Get service-level webhooks
+    const svcWhRes = await fetch('https://conversations.twilio.com/v1/Services/' + defaultSvc + '/Configuration/Webhooks', { headers });
+    const svcWhData = await svcWhRes.json();
+    
+    // List recent conversations to see if messages are flowing
+    const convRes = await fetch('https://conversations.twilio.com/v1/Services/' + defaultSvc + '/Conversations?PageSize=3', { headers });
+    const convData = await convRes.json();
+    
+    // Check persistentVacancyPrompt
+    const promptLen = (typeof persistentVacancyPrompt === 'string') ? persistentVacancyPrompt.length : 0;
+    
+    res.json({
+      defaultServiceSid: defaultSvc,
+      serviceWebhooks: svcWhData,
+      recentConversations: convData.conversations?.map(c => ({ sid: c.sid, name: c.friendly_name || c.unique_name, state: c.state })) || [],
+      persistentPromptLength: promptLen,
+      persistentPromptPreview: (persistentVacancyPrompt || '').substring(0, 200)
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0,300) });
+  }
+});
+
 app.get('/last-error', (req, res) => {
   res.json({ lastBypassError: lastBypassError || 'none', cacheLen: cachedVacantUnits.length, lastWebhookHit: lastWebhookHit || 'none', lastClaudeData: lastClaudeData || 'none' });
 });
