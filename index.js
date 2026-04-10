@@ -618,6 +618,80 @@ app.post('/webhook', async (req, res) => {
 });
 
 // Debug: see exactly what getVacantProperties returns
+
+// === META CLOUD API WEBHOOK HANDLER ===
+app.get('/meta-webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe') {
+    console.log('[Meta] Webhook verified');
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
+});
+
+app.post('/meta-webhook', async (req, res) => {
+  res.sendStatus(200); // Respond immediately
+  try {
+    const body = req.body;
+    if (body.object !== 'whatsapp_business_account') return;
+    
+    const entry = body.entry && body.entry[0];
+    const changes = entry && entry.changes && entry.changes[0];
+    const value = changes && changes.value;
+    if (!value || !value.messages) return;
+    
+    const msg = value.messages[0];
+    if (!msg || msg.type !== 'text') return;
+    
+    const phone = msg.from; // e.g. "97412345678"
+    const userMessage = msg.text.body;
+    const phoneNumberId = value.metadata.phone_number_id;
+    
+    console.log('[Meta Webhook] Message from ' + phone + ': ' + userMessage);
+    lastWebhookHit = { endpoint: 'meta-webhook', phone, msg: userMessage, time: new Date().toISOString() };
+    lastRequest = { path: '/meta-webhook', method: 'POST', bodyKeys: Object.keys(body), time: new Date().toISOString() };
+    
+    // Get properties and ask Claude
+    const properties = await getVacantProperties();
+    const claudeResponse = await askClaude(phone, userMessage, properties);
+    
+    // Parse Claude's JSON response
+    let replyText;
+    try {
+      const parsed = JSON.parse(claudeResponse);
+      replyText = parsed.reply || claudeResponse;
+    } catch(e) {
+      replyText = claudeResponse;
+    }
+    
+    // Send reply via Meta Cloud API
+    const metaToken = getConfig('META_ACCESS_TOKEN');
+    const metaPhoneId = getConfig('META_PHONE_NUMBER_ID') || phoneNumberId;
+    
+    await fetch('https://graph.facebook.com/v17.0/' + metaPhoneId + '/messages', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + metaToken,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: phone,
+        type: 'text',
+        text: { body: replyText }
+      })
+    });
+    
+    console.log('[Meta Webhook] Reply sent to ' + phone);
+  } catch(e) {
+    console.error('[Meta Webhook] Error:', e.message);
+    lastBypassError = { endpoint: 'meta-webhook', error: e.message, time: new Date().toISOString() };
+  }
+});
+// === END META CLOUD API WEBHOOK HANDLER ===
+
 app.get('/debug-vacancy', async (req, res) => {
   try {
     const sheets = await getGoogleSheets();
