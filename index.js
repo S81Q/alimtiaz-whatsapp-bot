@@ -1109,6 +1109,49 @@ app.get('/test-gmail', async (req, res) => {
   }
 });
 
+// --- Meta Cloud API Webhook (handles WhatsApp Business +974 7029 7066) ---
+app.get('/meta-webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && challenge) return res.status(200).send(challenge);
+  res.sendStatus(403);
+});
+
+app.post('/meta-webhook', async (req, res) => {
+  res.sendStatus(200);
+  try {
+    const body = req.body;
+    if (body.object !== 'whatsapp_business_account') return;
+    const entry = body.entry && body.entry[0];
+    const changes = entry && entry.changes && entry.changes[0];
+    const value = changes && changes.value;
+    if (!value || !value.messages) return;
+    const msg = value.messages[0];
+    if (!msg || msg.type !== 'text') return;
+    const phone = msg.from;
+    const userMessage = msg.text.body;
+    const phoneNumberId = value.metadata.phone_number_id;
+    console.log('[Meta] Message from ' + phone + ': ' + userMessage);
+    const properties = await getVacantProperties();
+    const claudeResponse = await askClaude(phone, userMessage, properties);
+    let replyText;
+    try {
+      const parsed = JSON.parse(claudeResponse.match(/\{[\s\S]*\}/)[0]);
+      replyText = parsed.reply || claudeResponse;
+    } catch { replyText = claudeResponse; }
+    const metaToken = getConfig('META_ACCESS_TOKEN');
+    const metaPhoneId = getConfig('META_PHONE_NUMBER_ID') || phoneNumberId;
+    await fetch('https://graph.facebook.com/v18.0/' + metaPhoneId + '/messages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + metaToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', to: phone, type: 'text', text: { body: replyText } })
+    });
+    const isArabic = /[\u0600-\u06FF]/.test(userMessage);
+    await logLead({ phone, name: '', language: isArabic ? 'Arabic' : 'English', question: userMessage, interestedUnit: '', status: 'New' });
+    console.log('[Meta] Reply sent to ' + phone);
+  } catch (e) { logError(e); }
+});
+
 // Health check endpoint
 // Auto-sync vacancy on startup so cache is always populated
 loadConfig().then(() => {
