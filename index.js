@@ -357,7 +357,7 @@ async function logLead({ phone, name, language, question, interestedUnit, status
 const anthropic = new Anthropic();
 
 const SYSTEM_PROMPT = `You are a bilingual real estate agent for Al-Imtiaz Wal-Jawada in Qatar.
-- Reply in same language as customer (Arabic or English)
+- Reply ENTIRELY in the same language as the customer. If they write in English, reply FULLY in English (translate ALL property names, descriptions, and details to English). If they write in Arabic, reply FULLY in Arabic. NEVER mix languages.
 - Only use property data provided, never invent
 - Answer: price, size, availability, bedrooms, bathrooms, location
 - Collect customer name naturally
