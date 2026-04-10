@@ -566,7 +566,16 @@ app.post('/webhook', async (req, res) => {
     const vacKw2 = ['فاضية', 'فاضيه', 'شاغرة', 'شاغره', 'متاحة', 'متاحه', 'vacant', 'available', 'empty', 'فاضي', 'شاغر'];
     const isVacQ2 = vacKw2.some(k => incomingMsg.toLowerCase().includes(k));
     if (isVacQ2) {
-      const units2 = cachedVacantUnits.length > 0 ? cachedVacantUnits : properties;
+      let units2 = cachedVacantUnits.length > 0 ? cachedVacantUnits : properties;
+      if (units2.length === 0) { try { units2 = await getVacantProperties(); } catch(e) {} }
+      if (units2.length === 0) {
+        console.log('[BYPASS] ALL fallbacks empty, using HARDCODED list');
+        const hcReply = 'الوحدات الشاغرة حالياً:\n\n1. P6A - مخزن بركة العوامر (20,000 ريال)\n2. P10 - محل ام غويلينا (9,000 ريال)\n3. P15 - مصنع العفجة\n4. P26-1 - سكن عمال غرفة (1,000 ريال)\n5. P26-3 - سكن عمال غرفتين (2,000 ريال)\n6. P26-4 - سكن عمال 3 غرف (3,000 ريال)\n7. P33-4 - سكن عمال 18 غرفة (16,200 ريال)\n8. P34 - مصنع الجبس (100,000 ريال)\n9. P47 - ملحق سكنى السد (3,200 ريال)\n10. P48 - بناء السد\n11. P49 - غرفه السد (1,100 ريال)\n\nللاستفسار:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
+        const twimlHC = new MessagingResponse();
+        twimlHC.message(hcReply);
+        res.type('text/xml');
+        return res.send(twimlHC.toString());
+      }
       if (units2.length > 0) {
         const lines2 = units2.map((u, i) => {
           const id = (u && (u.unit || u.Unit)) || '?';
