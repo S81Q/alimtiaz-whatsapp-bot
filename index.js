@@ -267,7 +267,7 @@ async function syncVacancyFromSheet() {
 }
 // --- Property Retrieval (filtered by vacancy) ---
 async function getVacantProperties() {
-  sheetsClient = null; // Force fresh auth on every property fetch
+  // sheetsClient reused for performance
   const sheets = await getGoogleSheets();
 
   const [propsResponse, vacancyResponse] = await Promise.all([
@@ -375,6 +375,7 @@ let lastClaudeData = null;
 
 // In-memory cache of vacant units (populated by syncVacancy)
 let cachedVacantUnits = [];
+let persistentVacancyPrompt = ''; // Always included in Claude's system prompt
 
 async function askClaude(phone, userMessage, properties) {
   const propertyData = JSON.stringify(properties, null, 2);
@@ -407,7 +408,7 @@ async function askClaude(phone, userMessage, properties) {
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1024,
-    system: `${SYSTEM_PROMPT}\n\nAvailable Properties:\n${propertyData}${vacancySummary}`,
+    system: `${SYSTEM_PROMPT}\n\nAvailable Properties:\n${propertyData}${vacancySummary}${persistentVacancyPrompt}`,
     messages: conversations[phone],
   });
 
