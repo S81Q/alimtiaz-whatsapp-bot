@@ -14,6 +14,22 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+// CATCH-ALL: Log every incoming request
+let lastRequest = null;
+app.use((req, res, next) => {
+  if (req.method === 'POST') {
+    lastRequest = { 
+      path: req.path, 
+      method: req.method, 
+      bodyKeys: Object.keys(req.body || {}),
+      bodySnippet: JSON.stringify(req.body || {}).substring(0, 200),
+      time: new Date().toISOString() 
+    };
+  }
+  next();
+});
+app.get('/last-request', (req, res) => res.json({ lastRequest: lastRequest || 'none' }));
+
 // Error logging
 const logError = (error) => {
   const msg = `[${new Date().toISOString()}] ${error.stack || error}\n`;
