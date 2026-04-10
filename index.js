@@ -1110,6 +1110,22 @@ app.get('/check-service-webhooks', async (req, res) => {
 
 
 
+app.get('/check-sandbox', async (req, res) => {
+  try {
+    const sid = getConfig('TWILIO_ACCOUNT_SID');
+    const token = getConfig('TWILIO_AUTH_TOKEN');
+    const auth = Buffer.from(sid + ':' + token).toString('base64');
+    const h = { 'Authorization': 'Basic ' + auth };
+    // Check sandbox config
+    const sbRes = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + sid + '/Sandbox.json', { headers: h });
+    const sbData = await sbRes.json();
+    // Check conversations config  
+    const cvRes = await fetch('https://conversations.twilio.com/v1/Configuration/Webhooks', { headers: h });
+    const cvData = await cvRes.json();
+    res.json({ sandbox: sbData, conversationsWebhook: cvData });
+  } catch(e) { res.json({ error: e.message }); }
+});
+
 app.get('/check-twilio-full', async (req, res) => {
   try {
     const sid = getConfig('TWILIO_ACCOUNT_SID');
