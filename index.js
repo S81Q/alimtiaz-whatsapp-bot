@@ -1871,7 +1871,7 @@ app.get('/health', (req, res) => {
 });
 
 // CATCH-ALL: Log ANY unmatched POST
-app.post('*', (req, res) => {
+app.use((req, res, next) => { if (req.method !== 'POST') return next();
   const log = new Date().toISOString() + ' | UNMATCHED | PATH:' + req.path + ' | KEYS:' + Object.keys(req.body||{}).join(',') + '\n';
   console.log('[UNMATCHED POST]', req.path);
   try { require('fs').appendFileSync('/tmp/webhook.log', log); } catch(e) {}
