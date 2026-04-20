@@ -34,7 +34,7 @@
  */
 
 const twilio = require('twilio');
-const { getSheetsClient } = require('./sheets-poster');
+const { getSheetsClient, getVacantUnits } = require('./sheets-poster');
 const { getVacantUnitsFromPdf } = require('./vacancy-from-pdf');
 
 // ─────────────────────────────────────────────
@@ -308,9 +308,29 @@ async function broadcastToBrokers(opts = {}) {
   console.log('[BrokerBroadcast] Options:', JSON.stringify(opts));
   console.log('═══════════════════════════════════════\n');
 
-  // 1. Vacant units — sourced from the monthly rent-report PDF (Gmail → Claude Vision)
-  const units = await getVacantUnitsFromPdf({ debug: !!opts.debug });
-  console.log(`[BrokerBroadcast] Vacant units found: ${units.length}`);
+  // 1. Vacant units — prefer the monthly rent-report PDF (Gmail → Claude Vision),
+  //    fall back to the Vacancy sheet if no PDF is available (off-cycle or Gmail error).
+  let units = [];
+  let unitsSource = 'pdf';
+  try {
+    units = await getVacantUnitsFromPdf({ debug: !!opts.debug });
+  } catch (e) {
+    console.warn('[BrokerBroadcast] PDF vacancy lookup threw:', e.message);
+    units = [];
+  }
+  if (!units || units.length === 0) {
+    console.log('[BrokerBroadcast] No PDF vacancies found – falling back to Vacancy sheet');
+    try {
+      units = await getVacantUnits();
+      unitsSource = 'sheet';
+    } catch (e) {
+      console.warn('[BrokerBroadcast] Sheet vacancy fallback threw:', e.message);
+      units = [];
+    }
+  }
+  summary.unitsSource = unitsSource;
+  summary.unitsCount = units.length;
+  console.log(`[BrokerBroadcast] Vacant units found: ${units.length} (source: ${unitsSource})`);
   if (units.length === 0) {
     console.log('[BrokerBroadcast] Nothing to broadcast. Exiting.');
     return summary;
