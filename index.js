@@ -802,6 +802,26 @@ app.post('/post-unit', async (req, res) => {
   );
 });
 
+// POST /broadcast-brokers  → Monthly vacant-unit broadcast to brokers via Twilio Content Template
+//   body { dryRun?: boolean, testOnly?: boolean }
+//   dryRun=true  → builds preview + recipient list WITHOUT sending
+//   testOnly=true → sends only to the bot's own TWILIO_WHATSAPP_NUMBER (for QA)
+app.post('/broadcast-brokers', async (req, res) => {
+  try {
+    const { broadcastToBrokers } = require('./broker-broadcast');
+    const { dryRun, testOnly } = req.body || {};
+    const result = await broadcastToBrokers({
+      dryRun: !!dryRun,
+      testOnly: !!testOnly,
+      _trigger: 'manual_api',
+    });
+    res.json({ status: 'done', result });
+  } catch (e) {
+    logError(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
 
 // POST /patch-apps-script  → One-time: inject webhook call into Apps Script updateVacancySheet
 app.post('/patch-apps-script', async (req, res) => {

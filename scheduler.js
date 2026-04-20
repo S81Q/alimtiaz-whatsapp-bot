@@ -12,6 +12,7 @@
 const cron = require('node-cron');
 const { runPosting } = require('./poster');
 const { getVacantUnits } = require('./sheets-poster');
+const { broadcastToBrokers } = require('./broker-broadcast');
 
 let lastVacancySnapshot = null;
 let isRunning = false;
@@ -110,6 +111,15 @@ function startScheduler() {
   cron.schedule('0 6 1 * *', async () => {
     console.log('[Scheduler] ⏰ Monthly cron fired: 1st of month, 09:00 Doha');
     await safeRun({ _trigger: 'monthly_cron' });
+
+    // After platform ad-posting, broadcast vacant-unit list to brokers on WhatsApp.
+    try {
+      console.log('[Scheduler] ▶ Starting monthly WhatsApp broker broadcast');
+      const res = await broadcastToBrokers({ _trigger: 'monthly_cron' });
+      console.log('[Scheduler] ✓ Broker broadcast summary:', JSON.stringify(res));
+    } catch (e) {
+      console.error('[Scheduler] ✗ Broker broadcast failed:', e.message);
+    }
   }); // node-cron uses server local time; on Railway UTC → need 6am UTC for 9am Doha
 
   console.log('[Scheduler] ✓ Monthly cron scheduled: every 1st at 09:00 Doha time');

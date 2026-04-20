@@ -16,3 +16,9 @@ do-commit.bat
 do-fix.bat
 do-push.bat
 do-resolve.bat
+.backup-broker/ 
+.env.railway
+Brokers_seed.xlsx
+railway_step*.png
+*.log
+BROKERS_SHEET_ID.txt
