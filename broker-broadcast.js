@@ -191,16 +191,62 @@ async function logBrokerResult({ phone, name, status, messageSid = '', error = '
 // the APPROVED Twilio Content Template, not in code.
 // See TWILIO_TEMPLATE.md for the exact template body to submit to Meta.
 
+// Twilio Content Variables limit is ~1024 chars per variable,
+// AND the fully rendered WhatsApp template body must stay ≤ 1024 chars.
+// The static template is ~650 chars, so {{1}} must stay under ~350 chars.
+// We compact each unit to a single line and truncate with a "+N more" note.
+const MAX_VAR_CHARS = 350;
+
+function formatUnitShort(u, i) {
+  const unit = u.unit || u.Unit || '';
+  const propAr = u.property || u.Property_Name || u.Location || '';
+  const propEn = u.propertyEn || u.Property_Name_EN || u.Type || '';
+  const rent = u.monthlyRent || u.Monthly_Rent || u.Rent || u.Rent_QAR || '';
+  const beds = u.bedrooms || u.Bedrooms || '';
+  const size = u.size || u.Size_sqm || '';
+  const prop = propEn || propAr || '';
+  const specs = [];
+  if (beds) specs.push(`${beds}BR`);
+  else if (size) specs.push(`${size}sqm`);
+  const parts = [`${i + 1}-`, unit].filter(Boolean);
+  if (prop) parts.push(`(${prop})`);
+  if (specs.length) parts.push(specs.join(' '));
+  if (rent) parts.push(`${rent} QAR`);
+  return parts.join(' ');
+}
+
 function buildUnitList(units) {
   if (!units || !units.length) return 'No vacant units currently.';
 
   const lines = [];
+  let charCount = 0;
+  let included = 0;
+  const suffixReserve = 40; // reserve chars for "+N more – contact us" line
+
+  for (let i = 0; i < units.length; i++) {
+    const line = formatUnitShort(units[i], i);
+    const addLen = line.length + 1; // +1 for newline
+    if (charCount + addLen > MAX_VAR_CHARS - suffixReserve) break;
+    lines.push(line);
+    charCount += addLen;
+    included++;
+  }
+
+  const remaining = units.length - included;
+  if (remaining > 0) {
+    lines.push(`+${remaining} more – contact us for full list`);
+  }
+  return lines.join('\n');
+}
+
+// Full (non-template) formatting – used for previews / fallback plain messages
+function buildUnitListFull(units) {
+  if (!units || !units.length) return 'No vacant units currently.';
+  const lines = [];
   units.forEach((u, i) => {
     const unit = u.unit || u.Unit || '';
-    // Property name: PDF source uses property/propertyEn; sheet source uses Location (ar) + Type (en)
     const propAr = u.property || u.Property_Name || u.Location || '';
     const propEn = u.propertyEn || u.Property_Name_EN || u.Type || '';
-    // Rent: PDF source uses monthlyRent; sheet source uses Rent_QAR
     const rent = u.monthlyRent || u.Monthly_Rent || u.Rent || u.Rent_QAR || '';
     const size = u.size || u.Size_sqm || '';
     const beds = u.bedrooms || u.Bedrooms || '';
@@ -226,13 +272,12 @@ function buildUnitList(units) {
     if (rent) lines.push(`Rent: ${rent} QAR/month`);
     lines.push('');
   });
-  // Drop trailing blank line
   while (lines.length && lines[lines.length - 1] === '') lines.pop();
   return lines.join('\n');
 }
 
 function buildFullPreview(units) {
-  const unitList = buildUnitList(units);
+  const unitList = buildUnitListFull(units);
   return (
     '*Properties for rent | عقارات للايجار*\n' +
     '\n' +
@@ -463,6 +508,7 @@ module.exports = {
   broadcastToBrokers,
   buildBilingualMessage, // legacy alias -> full preview
   buildUnitList,
+  buildUnitListFull,
   buildFullPreview,
   normalisePhone,
 };

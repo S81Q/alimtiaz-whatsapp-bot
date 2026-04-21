@@ -22,3 +22,7 @@ Brokers_seed.xlsx
 railway_step*.png
 *.log
 BROKERS_SHEET_ID.txt
+Code.gs
+Code.gs.patched
+VACANCY_BROADCAST_FIX_INSTRUCTIONS.md
+test-buildUnitList.js
