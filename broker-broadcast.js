@@ -197,15 +197,33 @@ function buildUnitList(units) {
   const lines = [];
   units.forEach((u, i) => {
     const unit = u.unit || u.Unit || '';
-    const propAr = u.property || u.Property_Name || '';
-    const propEn = u.propertyEn || u.Property_Name_EN || '';
-    const rent = u.monthlyRent || u.Monthly_Rent || u.Rent || '';
+    // Property name: PDF source uses property/propertyEn; sheet source uses Location (ar) + Type (en)
+    const propAr = u.property || u.Property_Name || u.Location || '';
+    const propEn = u.propertyEn || u.Property_Name_EN || u.Type || '';
+    // Rent: PDF source uses monthlyRent; sheet source uses Rent_QAR
+    const rent = u.monthlyRent || u.Monthly_Rent || u.Rent || u.Rent_QAR || '';
+    const size = u.size || u.Size_sqm || '';
+    const beds = u.bedrooms || u.Bedrooms || '';
+    const baths = u.bathrooms || u.Bathrooms || '';
+    const zone = u.zone || u.Zone || '';
+    const street = u.street || u.Street || '';
+    const building = u.building || u.Building || '';
 
     lines.push(`#${i + 1}`);
     lines.push(`Unit | الوحدة: ${unit}`);
     const propParts = [propAr, propEn].filter(Boolean).join(' | ');
     if (propParts) lines.push(`Property | العقار: ${propParts}`);
-    if (rent) lines.push(`Rent: ${rent}`);
+    const addrParts = [];
+    if (zone) addrParts.push(`Zone ${zone}`);
+    if (street) addrParts.push(`St ${street}`);
+    if (building) addrParts.push(`Bldg ${building}`);
+    if (addrParts.length) lines.push(`Address | العنوان: ${addrParts.join(', ')}`);
+    const specParts = [];
+    if (size) specParts.push(`${size} sqm`);
+    if (beds) specParts.push(`${beds} BR`);
+    if (baths) specParts.push(`${baths} Bath`);
+    if (specParts.length) lines.push(`Specs: ${specParts.join(' | ')}`);
+    if (rent) lines.push(`Rent: ${rent} QAR/month`);
     lines.push('');
   });
   // Drop trailing blank line
