@@ -415,9 +415,10 @@ function isVacancyQuery(text) {
 const NO_VACANCY_REPLY = 'لا توجد وحدات متاحة للإيجار في الوقت الحالي. 🙏\n\nيسعدنا تسجيل طلبك والتواصل معك فور توفر وحدة مناسبة.\n\nللاستفسار:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
 function buildVacancyReply(units) {
   const lines = units.map((u, i) => {
-    const id = (u && (u.unit || u.Unit)) || '?';
-    const nm = (u && (u.property || u.Property_Name || u.propertyName)) || '';
-    const rt = (u && (u.monthlyRent || u.Rent_QAR)) ? ' - ' + (u.monthlyRent || u.Rent_QAR) + ' ريال/شهر' : '';
+    u = u || {};
+    const id = u.unit || u.Unit || '?';
+    const nm = u.property || u.Property_Name || u.propertyName || u.Location || u.Type || '';
+    const rt = (u.monthlyRent || u.Rent_QAR) ? ' - ' + (u.monthlyRent || u.Rent_QAR) + ' ريال/شهر' : '';
     return nm ? (i + 1) + '. ' + id + ' - ' + nm + rt : (i + 1) + '. ' + id + rt;
   });
   return 'الوحدات الشاغرة حالياً (' + units.length + ' وحدة):\n\n' + lines.join('\n') +
