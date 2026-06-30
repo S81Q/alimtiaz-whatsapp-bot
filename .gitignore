@@ -1,7 +1,12 @@
+# --- secrets hardening ---
 node_modules/
 .env
-errors.log
+.env.*
 service-account.json
+credentials.json
+token.json
+*.log
+# --- end secrets hardening ---
 get-new-otp.js
 local-otp.js
 wait-new-otp.js
@@ -16,11 +21,9 @@ do-commit.bat
 do-fix.bat
 do-push.bat
 do-resolve.bat
-.backup-broker/ 
-.env.railway
+.backup-broker/
 Brokers_seed.xlsx
 railway_step*.png
-*.log
 BROKERS_SHEET_ID.txt
 Code.gs
 Code.gs.patched
