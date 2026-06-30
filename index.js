@@ -819,15 +819,8 @@ app.post('/webhook', async (req, res) => {
         return res.send(twimlHC.toString());
       }
       if (units2.length > 0) {
-        const lines2 = units2.map((u, i) => {
-          const id = (u && (u.unit || u.Unit)) || '?';
-          const nm = (u && (u.property || u.Property_Name || u.propertyName)) || '';
-          const rt = (u && u.monthlyRent) ? ' - ' + u.monthlyRent + ' ريال/شهر' : '';
-          return nm ? (i+1) + '. ' + id + ' - ' + nm + rt : (i+1) + '. ' + id + rt;
-        });
-        const vacReply = 'الوحدات الشاغرة حالياً (' + units2.length + ' وحدة):\n\n' + lines2.join('\n') + '\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
         const twiml2 = new MessagingResponse();
-        twiml2.message(vacReply);
+        twiml2.message(buildVacancyReply(units2)); // shared formatter (uses Location/Type as name)
         res.type('text/xml');
         return res.send(twiml2.toString());
       }
