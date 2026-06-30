@@ -270,9 +270,14 @@ async function syncVacancyFromSheet() {
 // Owner/landlord columns that must NEVER reach a customer or Claude.
 const OWNER_COL_RE = /owner|landlord|proprietor|مالك|المالك|الملاك|ملاك|صاحب|اسم.?المالك/i;
 function _norm(v) { return (v == null ? '' : String(v)).trim(); }
-// "Available" ground truth = exactly متاح (or feminine متاحة), trimmed. Nothing else.
-function isAvailableStatus(v) { const s = _norm(v); return s === 'متاح' || s === 'متاحة'; }
-function isRentedStatus(v) { const s = _norm(v); return s.indexOf('مؤجر') === 0; }
+// Vacancy ground truth = the Properties Status column. The live sheet marks units
+// "Available" (English); Arabic متاح/متاحة is also honored. A unit is shown ONLY if its
+// status is explicitly an available-marker. Anything that means rented/occupied is excluded.
+function isAvailableStatus(v) { const s = _norm(v); return s === 'متاح' || s === 'متاحة' || /^available$/i.test(s); }
+function isRentedStatus(v) {
+  const s = _norm(v);
+  return s.indexOf('مؤجر') === 0 || /^(rented|occupied|leased|let|not\s*available|unavailable|مشغول)$/i.test(s);
+}
 
 // SOURCE OF TRUTH for vacancy = the manual Properties sheet's status column === متاح.
 // Owner/landlord columns are stripped before returning. The Gmail auto-detector is
@@ -948,6 +953,8 @@ app.get('/debug-vacancy', async (req, res) => {
 app.get('/debug-properties', async (req, res) => {
   try {
     const sheets = await getGoogleSheets();
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID }).catch(() => null);
+    const tabs = meta ? (meta.data.sheets || []).map(s => s.properties.title) : [];
     const resp = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Properties!A1:Z1000' });
     const rows = resp.data.values || [];
     const headers = (rows[0] || []).map(h => _norm(h));
@@ -978,6 +985,7 @@ app.get('/debug-properties', async (req, res) => {
     });
     const vacant = await getVacantProperties();
     res.json({
+      tabs,
       distinctByHeader,
       headers,
       totalDataRows: dataRows.length,
