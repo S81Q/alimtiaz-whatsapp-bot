@@ -995,6 +995,88 @@ app.get('/debug-properties', async (req, res) => {
   }
 });
 
+// ===== TEMPORARY ADMIN: rent-report extraction + Status writer (remove after use) =====
+function _colLetter(i) { let s = '', n = i + 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+async function _gmailToken() {
+  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: process.env.GMAIL_OAUTH_CLIENT_ID, client_secret: process.env.GMAIL_OAUTH_CLIENT_SECRET, refresh_token: process.env.GMAIL_OAUTH_REFRESH_TOKEN, grant_type: 'refresh_token' }) });
+  const d = await r.json();
+  if (!d.access_token) throw new Error('gmail token: ' + JSON.stringify(d).substring(0, 200));
+  return d.access_token;
+}
+function _findPdfPart(parts) { for (const p of (parts || [])) { if (p.filename && p.filename.toLowerCase().endsWith('.pdf') && p.body && p.body.attachmentId) return p; if (p.parts) { const r = _findPdfPart(p.parts); if (r) return r; } } return null; }
+
+// FAITHFUL extraction: returns raw per-row report data + the Properties map. No judgment.
+app.get('/admin-rent-extract', async (req, res) => {
+  try {
+    const at = await _gmailToken();
+    const q = encodeURIComponent('from:alamtyaz.wa.aljawada@gmail.com has:attachment newer_than:200d');
+    const sd = await (await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?q=' + q + '&maxResults=30', { headers: { Authorization: 'Bearer ' + at } })).json();
+    const messages = sd.messages || [];
+    const cands = [];
+    for (const m of messages) {
+      const md = await (await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + m.id + '?format=metadata&metadataHeaders=Subject&metadataHeaders=Date', { headers: { Authorization: 'Bearer ' + at } })).json();
+      const hs = (md.payload || {}).headers || [];
+      cands.push({ id: m.id, subject: (hs.find(h => h.name === 'Subject') || {}).value || '', date: (hs.find(h => h.name === 'Date') || {}).value || '', internalDate: md.internalDate });
+    }
+    cands.sort((a, b) => Number(b.internalDate) - Number(a.internalDate));
+    const RENT = ['ايجار', 'إيجار', 'محصل', 'المحصل', 'تحصيل', 'rent', 'collected'];
+    const EXC = ['مصاريف', 'فاتور', 'expense', 'invoice'];
+    const ranked = cands.filter(c => RENT.some(k => c.subject.includes(k)) && !EXC.some(k => c.subject.includes(k)));
+    const chosen = ranked[0] || cands[0];
+    if (!chosen) return res.json({ error: 'no emails', candidatesTop: cands.slice(0, 10) });
+    const full = await (await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + chosen.id + '?format=full', { headers: { Authorization: 'Bearer ' + at } })).json();
+    const pdf = _findPdfPart((full.payload || {}).parts);
+    if (!pdf) return res.json({ error: 'no pdf', chosen, parts: ((full.payload || {}).parts || []).map(p => p.filename) });
+    const att = await (await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + chosen.id + '/attachments/' + pdf.body.attachmentId, { headers: { Authorization: 'Bearer ' + at } })).json();
+    const b64 = att.data.replace(/-/g, '+').replace(/_/g, '/');
+    const ex = await anthropic.messages.create({
+      model: CLAUDE_MODEL, max_tokens: 8000, thinking: { type: 'disabled' }, output_config: { effort: 'low' },
+      messages: [{ role: 'user', content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } },
+        { type: 'text', text: 'This is an Arabic monthly rent-collection report. Extract EVERY property/unit row VERBATIM. Do NOT decide vacant vs rented and do NOT omit rows. For each row output JSON {"row":N,"property":"<exact arabic property/unit text>","tenant":"<tenant text or empty>","rent_due":"<number or empty>","rent_received":"<number or empty>","remarks":"<the exact البيان/الملاحظات/الحالة cell text, or empty>"}. Return ONLY a JSON array.' }
+      ] }]
+    });
+    const txt = ex.content[0].text;
+    let rows = []; try { rows = JSON.parse((txt.match(/\[[\s\S]*\]/) || ['[]'])[0]); } catch (e) {}
+    const sheets = await getGoogleSheets();
+    const pr = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Properties!A1:Z1000' });
+    const prows = pr.data.values || []; const ph = (prows[0] || []);
+    const iUnit = ph.indexOf('Unit'), iID = ph.indexOf('ID'), iType = ph.indexOf('Type'), iLoc = ph.indexOf('Location'), iStat = ph.indexOf('Status');
+    const props = prows.slice(1).filter(r => r.some(c => _norm(c))).map((r, idx) => ({ rowNumber: idx + 2, ID: r[iID] || '', Unit: r[iUnit] || '', Type: r[iType] || '', Location: r[iLoc] || '', Status: r[iStat] || '' }));
+    res.json({ chosen, pdfFile: pdf.filename, candidatesTop: cands.slice(0, 8).map(c => ({ subject: c.subject, date: c.date })), extractedRowCount: rows.length, rows, statusColumnLetter: _colLetter(iStat), properties: props });
+  } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').substring(0, 400) }); }
+});
+
+// Status writer: writes متاح/مؤجر into the detected Status column for the units passed.
+// Default is dry-run; pass ?apply=1 to commit. Only touches the Status column.
+app.post('/admin-set-status', async (req, res) => {
+  try {
+    const apply = req.query.apply === '1';
+    const updates = (req.body && req.body.updates) || [];
+    if (!Array.isArray(updates) || !updates.length) return res.status(400).json({ error: 'no updates' });
+    const sheets = await getGoogleSheets();
+    const pr = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Properties!A1:Z1000' });
+    const prows = pr.data.values || []; const ph = (prows[0] || []);
+    let iStat = ph.indexOf('Status');
+    const iUnit = ph.indexOf('Unit'), iID = ph.indexOf('ID');
+    if (iStat < 0) return res.status(500).json({ error: 'no Status header' });
+    const letter = _colLetter(iStat);
+    const find = (key) => { for (let r = 1; r < prows.length; r++) { if (_norm(prows[r][iUnit]) === key || _norm(prows[r][iID]) === key) return r + 1; } return -1; };
+    const data = [], results = [];
+    for (const u of updates) {
+      const status = _norm(u.status);
+      if (status !== 'متاح' && status !== 'مؤجر') { results.push({ unit: u.unit, error: 'bad status: ' + status }); continue; }
+      const rowNum = find(_norm(u.unit));
+      if (rowNum < 0) { results.push({ unit: u.unit, error: 'not found' }); continue; }
+      data.push({ range: 'Properties!' + letter + rowNum, values: [[status]] });
+      results.push({ unit: u.unit, row: rowNum, cell: letter + rowNum, status });
+    }
+    if (apply && data.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: SHEET_ID, requestBody: { valueInputOption: 'RAW', data } });
+    res.json({ apply, statusColumn: letter, planned: data.length, written: apply ? data.length : 0, results });
+  } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').substring(0, 300) }); }
+});
+// ===== END TEMPORARY ADMIN =====
+
 // Manual vacancy sync trigger endpoint
 app.post('/sync-vacancy', async (req, res) => {
   try {
