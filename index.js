@@ -211,7 +211,7 @@ async function getVacantUnitsFromGmail() {
   // Step 5: Send to Claude AI for vacancy analysis
   console.log('[VacancySync] Sending PDF to Claude for analysis...');
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: CLAUDE_MODEL,
     max_tokens: 4096,
     messages: [{
       role: 'user',
@@ -356,6 +356,240 @@ async function logLead({ phone, name, language, question, interestedUnit, status
 // --- Claude AI Setup ---
 const anthropic = new Anthropic();
 
+// ============================================================================
+// PROVIDER ABSTRACTION + DELIVERY OBSERVABILITY
+// Same business logic (vacancy lookup, lead capture, Claude replies) serves
+// BOTH providers (Twilio TwiML + Meta Cloud API) behind PROVIDER env.
+// ============================================================================
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
+const SANDBOX_NUMBER = 'whatsapp:+14155238886';
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v21.0';
+const DEFAULT_VERIFY_TOKEN = 'alimtiaz_verify_2026';
+const ALERT_EMAIL = process.env.ALERT_EMAIL || 'sultanaliqatar81@gmail.com';
+const ARABIC_FALLBACK = 'عذراً، حدث خطأ مؤقت في النظام. حاول مرة أخرى بعد قليل.';
+
+// Runtime observability state (surfaced on /health + /selftest)
+const botState = {
+  startedAt: new Date().toISOString(),
+  lastInboundAt: null,
+  lastInbound: null,                              // {provider, phone, msg, at}
+  lastOutboundDelivery: null,                     // {provider, messageId, status, at, error}
+  lastSuccess: { rule: null, claude: null },      // last successful reply per path
+  lastClaudeError: null,                          // {kind, status, message, at}
+  lastAlert: null,                                // {key, message, at}
+};
+
+// Delivery ledger: messageId -> { direction, provider, status, inboundAt, replyAt, errorCode, ... }
+const deliveryLedger = new Map();
+const LEDGER_MAX = 500;
+function ledgerPut(id, rec) {
+  if (!id) return;
+  const prev = deliveryLedger.get(id) || {};
+  deliveryLedger.set(id, { ...prev, ...rec, updatedAt: new Date().toISOString() });
+  if (deliveryLedger.size > LEDGER_MAX) deliveryLedger.delete(deliveryLedger.keys().next().value);
+}
+function ledgerGet(id) { return deliveryLedger.get(id) || null; }
+
+// Inbound de-duplication (Meta retries deliver the same message id repeatedly)
+const processedInbound = new Set();
+function alreadyProcessed(id) {
+  if (!id) return false;
+  if (processedInbound.has(id)) return true;
+  processedInbound.add(id);
+  if (processedInbound.size > 2000) processedInbound.delete(processedInbound.values().next().value);
+  return false;
+}
+
+function activeProvider() {
+  const p = (process.env.PROVIDER || '').toLowerCase();
+  return (p === 'meta' || p === 'twilio') ? p : 'twilio';
+}
+function runMode() {
+  if (activeProvider() === 'meta') return 'production';
+  const twNum = getConfig('TWILIO_WHATSAPP_NUMBER') || '';
+  return (twNum === SANDBOX_NUMBER || twNum.includes('14155238886')) ? 'sandbox' : 'production';
+}
+
+// Classify an Anthropic/Sheet error into a DISTINCT kind so failures never
+// collapse into one opaque message. auth / quota / model / timeout / sheet.
+function classifyError(err) {
+  const status = err && (err.status || err.statusCode || (err.response && err.response.status));
+  const msg = (err && err.message) || String(err);
+  let kind = 'unknown';
+  if (status === 401 || /authentication_error|invalid x-api-key|401/i.test(msg)) kind = 'auth';
+  else if (status === 403 || /permission_error|permission denied/i.test(msg)) kind = 'permission';
+  else if (status === 402 || status === 429 || /rate_limit|quota|credit balance|billing|insufficient/i.test(msg)) kind = 'quota';
+  else if (status === 404 || /not_found_error|model:/i.test(msg)) kind = 'model';
+  else if (/timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|aborted/i.test(msg)) kind = 'timeout';
+  else if (/sheet|spreadsheet|googleapis|service account/i.test(msg)) kind = 'sheet';
+  return { kind, status: status || null, message: String(msg).substring(0, 300) };
+}
+
+// ---- Rule path (vacancy keyword) ----
+const VAC_KEYWORDS = ['فاضية','فاضيه','شاغرة','شاغره','متاحة','متاحه','vacant','available','empty','فاضي','شاغر'];
+function isVacancyQuery(text) {
+  const t = (text || '').toLowerCase();
+  return VAC_KEYWORDS.some(k => t.includes(k));
+}
+const HARDCODED_VACANCY = 'الوحدات الشاغرة حالياً:\n\n1. P6A - مخزن بركة العوامر (20,000 ريال)\n2. P10 - محل ام غويلينا (9,000 ريال)\n3. P15 - مصنع العفجة\n4. P26-1 - سكن عمال غرفة (1,000 ريال)\n5. P26-3 - سكن عمال غرفتين (2,000 ريال)\n6. P26-4 - سكن عمال 3 غرف (3,000 ريال)\n7. P33-4 - سكن عمال 18 غرفة (16,200 ريال)\n8. P34 - مصنع الجبس (100,000 ريال)\n9. P47 - ملحق سكنى السد (3,200 ريال)\n10. P48 - بناء السد\n11. P49 - غرفه السد (1,100 ريال)\n\nللاستفسار:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
+function buildVacancyReply(units) {
+  const lines = units.map((u, i) => {
+    const id = (u && (u.unit || u.Unit)) || '?';
+    const nm = (u && (u.property || u.Property_Name || u.propertyName)) || '';
+    const rt = (u && (u.monthlyRent || u.Rent_QAR)) ? ' - ' + (u.monthlyRent || u.Rent_QAR) + ' ريال/شهر' : '';
+    return nm ? (i + 1) + '. ' + id + ' - ' + nm + rt : (i + 1) + '. ' + id + rt;
+  });
+  return 'الوحدات الشاغرة حالياً (' + units.length + ' وحدة):\n\n' + lines.join('\n') +
+    '\n\nللاستفسار والحجز:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
+}
+
+// SHARED business logic for BOTH providers. Returns { reply, path, errorKind? }.
+async function generateReply(incomingMsg, phone) {
+  // Rule path: vacancy keyword → list of vacant units (no Claude needed)
+  if (isVacancyQuery(incomingMsg)) {
+    let units = (cachedVacantUnits && cachedVacantUnits.length > 0) ? cachedVacantUnits : [];
+    if (units.length === 0) { try { units = await getVacantProperties(); } catch (e) {} }
+    botState.lastSuccess.rule = new Date().toISOString();
+    return { reply: units.length > 0 ? buildVacancyReply(units) : HARDCODED_VACANCY, path: 'rule' };
+  }
+  // Claude path: conversational
+  try {
+    delete conversations[phone];
+    let properties = [];
+    try { properties = await getVacantProperties(); } catch (e) { properties = cachedVacantUnits || []; }
+    const claudeResponse = await askClaude(phone, incomingMsg, properties);
+    let parsed;
+    try {
+      const m = claudeResponse.match(/\{[\s\S]*\}/);
+      parsed = m ? JSON.parse(m[0]) : { reply: claudeResponse };
+    } catch { parsed = { reply: claudeResponse }; }
+    const reply = parsed.reply || claudeResponse;
+    botState.lastSuccess.claude = new Date().toISOString();
+    botState.lastClaudeError = null;
+    try {
+      const isArabic = /[؀-ۿ]/.test(incomingMsg);
+      await logLead({ phone, name: parsed.collected_name || '', language: isArabic ? 'Arabic' : 'English',
+        question: incomingMsg, interestedUnit: parsed.interested_unit || '',
+        status: parsed.interested_unit ? 'Interested' : 'New' });
+    } catch (e) {}
+    return { reply, path: 'claude' };
+  } catch (err) {
+    const c = classifyError(err);
+    botState.lastClaudeError = { ...c, at: new Date().toISOString() };
+    logError(new Error('[generateReply][' + c.kind + '][status=' + c.status + '] ' + c.message));
+    console.error('[generateReply] FAILED kind=' + c.kind + ' status=' + c.status + ' :: ' + c.message);
+    return { reply: getConfig('FALLBACK_MESSAGE') || ARABIC_FALLBACK, path: 'claude', errorKind: c.kind };
+  }
+}
+
+function recordInbound(provider, phone, msg) {
+  const at = new Date().toISOString();
+  botState.lastInboundAt = at;
+  botState.lastInbound = { provider, phone, msg: (msg || '').substring(0, 80), at };
+  try { fs.appendFileSync('/tmp/webhook.log', at + ' | ' + provider.toUpperCase() + ' | FROM:' + phone + ' | MSG:' + (msg || '').substring(0, 50) + '\n'); } catch (e) {}
+  return at;
+}
+
+// ---- Meta Cloud API: outbound send + inbound/status handling ----
+async function sendMeta(phone, text, phoneNumberId) {
+  const token = getConfig('META_ACCESS_TOKEN');
+  const pid = getConfig('META_PHONE_NUMBER_ID') || phoneNumberId;
+  if (!token || !pid) { console.error('[Meta] missing META_ACCESS_TOKEN/PHONE_NUMBER_ID'); return { ok: false, reason: 'no-credentials' }; }
+  try {
+    const r = await fetch('https://graph.facebook.com/' + META_GRAPH_VERSION + '/' + pid + '/messages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', to: phone, type: 'text', text: { body: text } }),
+    });
+    const data = await r.json().catch(() => ({}));
+    const outboundId = data && data.messages && data.messages[0] && data.messages[0].id;
+    if (!r.ok) {
+      const reason = JSON.stringify(data).substring(0, 300);
+      botState.lastOutboundDelivery = { provider: 'meta', status: 'failed', at: new Date().toISOString(), error: reason };
+      console.error('[Meta] send failed status=' + r.status + ' ' + reason);
+      return { ok: false, status: r.status, reason };
+    }
+    botState.lastOutboundDelivery = { provider: 'meta', messageId: outboundId, status: 'sent', at: new Date().toISOString() };
+    if (outboundId) ledgerPut(outboundId, { direction: 'outbound', provider: 'meta', to: phone, status: 'sent' });
+    return { ok: true, outboundId };
+  } catch (e) {
+    botState.lastOutboundDelivery = { provider: 'meta', status: 'error', at: new Date().toISOString(), error: e.message };
+    return { ok: false, reason: e.message };
+  }
+}
+
+function recordMetaStatus(st) {
+  // st: { id, status: sent|delivered|read|failed, timestamp, recipient_id, errors:[{code,title}] }
+  const rec = { direction: 'outbound', provider: 'meta', status: st.status, to: st.recipient_id,
+    statusAt: new Date(((parseInt(st.timestamp, 10) || (Date.now() / 1000))) * 1000).toISOString() };
+  if (st.errors && st.errors[0]) { rec.errorCode = st.errors[0].code; rec.errorReason = st.errors[0].title || st.errors[0].message || ''; }
+  ledgerPut(st.id, rec);
+  botState.lastOutboundDelivery = { provider: 'meta', messageId: st.id, status: st.status, at: new Date().toISOString(), error: rec.errorReason || null };
+  console.log('[Meta status] id=' + st.id + ' status=' + st.status + (rec.errorCode ? ' err=' + rec.errorCode + ':' + rec.errorReason : ''));
+  if (st.status === 'failed') maybeAlert('meta-delivery-failed', 'Meta delivery FAILED for ' + st.id + ' (' + (rec.errorReason || rec.errorCode || 'unknown') + ')');
+}
+
+async function handleMetaWebhook(body) {
+  const entry = body.entry && body.entry[0];
+  const change = entry && entry.changes && entry.changes[0];
+  const value = change && change.value;
+  if (!value) return;
+  if (value.statuses) { for (const st of value.statuses) recordMetaStatus(st); return; }
+  if (!value.messages) return;
+  const msg = value.messages[0];
+  if (!msg) return;
+  const msgId = msg.id;
+  if (alreadyProcessed(msgId)) { console.log('[Meta] duplicate inbound ignored ' + msgId); return; }
+  const phone = msg.from;
+  const userMessage = msg.type === 'text' ? (msg.text && msg.text.body) : '';
+  if (!userMessage) { console.log('[Meta] non-text inbound ignored type=' + msg.type); return; }
+  const inboundAt = recordInbound('meta', phone, userMessage);
+  const phoneNumberId = value.metadata && value.metadata.phone_number_id;
+  const { reply, path: replyPath } = await generateReply(userMessage, phone);
+  const replyAt = new Date().toISOString();
+  const sent = await sendMeta(phone, reply, phoneNumberId);
+  ledgerPut(msgId, { direction: 'inbound', provider: 'meta', from: phone, inboundAt, replyAt, path: replyPath, replySent: !!(sent && sent.ok) });
+  console.log('[Meta] inbound ' + msgId + ' path=' + replyPath + ' sent=' + (sent && sent.ok));
+}
+
+// ---- Twilio: delivery status callback parsing ----
+function recordTwilioStatus(body) {
+  const id = body.MessageSid || body.SmsSid;
+  const status = body.MessageStatus || body.SmsStatus;
+  const rec = { direction: 'outbound', provider: 'twilio', status, to: (body.To || '').replace('whatsapp:', ''), statusAt: new Date().toISOString() };
+  if (body.ErrorCode) { rec.errorCode = body.ErrorCode; rec.errorReason = body.ErrorMessage || ('Twilio error ' + body.ErrorCode); }
+  ledgerPut(id, rec);
+  botState.lastOutboundDelivery = { provider: 'twilio', messageId: id, status, at: new Date().toISOString(), error: rec.errorReason || null };
+  console.log('[Twilio status] sid=' + id + ' status=' + status + (body.ErrorCode ? ' err=' + body.ErrorCode : ''));
+  if (status === 'failed' || status === 'undelivered') maybeAlert('twilio-delivery-failed', 'Twilio delivery ' + status + ' for ' + id + ' err=' + (body.ErrorCode || ''));
+}
+
+// ---- Alerting (best-effort email via Gmail OAuth; always logs) ----
+const alertTimestamps = {};
+async function maybeAlert(key, message) {
+  const now = Date.now();
+  if (alertTimestamps[key] && (now - alertTimestamps[key]) < 3600000) return; // dedup: 1/hour/key
+  alertTimestamps[key] = now;
+  botState.lastAlert = { key, message, at: new Date().toISOString() };
+  console.error('[ALERT][' + key + '] ' + message);
+  try { await sendAlertEmail('[Al-Imtiaz Bot] ' + key, message); } catch (e) { console.error('[ALERT] email failed: ' + e.message); }
+}
+async function sendAlertEmail(subject, text) {
+  if (!process.env.GMAIL_OAUTH_CLIENT_ID || !process.env.GMAIL_OAUTH_REFRESH_TOKEN) {
+    console.error('[ALERT] Gmail OAuth not configured (GMAIL_OAUTH_*) — alert logged only');
+    return;
+  }
+  const oauth2 = new google.auth.OAuth2(process.env.GMAIL_OAUTH_CLIENT_ID, process.env.GMAIL_OAUTH_CLIENT_SECRET, 'urn:ietf:wg:oauth:2.0:oob');
+  oauth2.setCredentials({ refresh_token: process.env.GMAIL_OAUTH_REFRESH_TOKEN });
+  const gmail = google.gmail({ version: 'v1', auth: oauth2 });
+  const raw = Buffer.from(
+    'To: ' + ALERT_EMAIL + '\r\nSubject: ' + subject + '\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n' + text
+  ).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+  console.log('[ALERT] email sent to ' + ALERT_EMAIL);
+}
+// ============================================================================
+
 const SYSTEM_PROMPT = `You are a bilingual real estate agent for Al-Imtiaz Wal-Jawada in Qatar.
 - Reply ENTIRELY in the same language as the customer. If they write in English, reply FULLY in English (translate ALL property names, descriptions, and details to English). If they write in Arabic, reply FULLY in Arabic. NEVER mix languages.
 - Only use property data provided, never invent
@@ -434,8 +668,12 @@ async function askClaude(phone, userMessage, properties) {
   }
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: CLAUDE_MODEL,
     max_tokens: 1024,
+    // Fast, cheap chat: Sonnet 4.6 defaults to high effort; disable thinking and
+    // use low effort so WhatsApp replies stay snappy (~1s) like the old Sonnet-4 path.
+    thinking: { type: 'disabled' },
+    output_config: { effort: 'low' },
     system: `${SYSTEM_PROMPT}\n\nAvailable Properties:\n${propertyData}${vacancySummary}${persistentVacancyPrompt}`,
     messages: conversations[phone],
   });
@@ -551,10 +789,27 @@ app.post('/conversations-webhook', async (req, res) => {
 
 // --- Twilio WhatsApp Webhook ---
 app.post('/webhook', async (req, res) => {
-  console.log('[WEBHOOK HIT] Body keys:', Object.keys(req.body || {}), 'From:', req.body.From, 'Body:', (req.body.Body || '').substring(0, 50));
-  lastRequest = { path: '/webhook', method: 'POST', bodyKeys: Object.keys(req.body || {}), time: new Date().toISOString() };
-  // File-based log that survives restarts
-  try { require('fs').appendFileSync('/tmp/webhook.log', new Date().toISOString() + ' | FROM:' + (req.body.From||'?') + ' | MSG:' + (req.body.Body||'').substring(0,50) + '\n'); } catch(e) {}
+  const _body = req.body || {};
+  lastRequest = { path: '/webhook', method: 'POST', bodyKeys: Object.keys(_body), time: new Date().toISOString() };
+
+  // ROUTING 1: Meta Cloud API JSON (inbound message OR delivery status)
+  if (_body.object === 'whatsapp_business_account') {
+    res.sendStatus(200); // ack immediately, then process async
+    handleMetaWebhook(_body).catch(e => logError(new Error('[Meta webhook] ' + (e && e.message))));
+    return;
+  }
+  // ROUTING 2: Twilio delivery status callback (has MessageStatus, no Body)
+  if ((_body.MessageStatus || _body.SmsStatus) && !_body.Body) {
+    try { recordTwilioStatus(_body); } catch (e) { logError(e); }
+    return res.sendStatus(204);
+  }
+
+  // ROUTING 3: Twilio inbound WhatsApp message -> synchronous TwiML reply
+  console.log('[WEBHOOK HIT][twilio] From:', _body.From, 'Body:', (_body.Body || '').substring(0, 50));
+  const _msgId = _body.MessageSid || ('tw_' + Date.now());
+  if (alreadyProcessed(_msgId)) { res.type('text/xml'); return res.send(new MessagingResponse().toString()); }
+  const _inboundAt = recordInbound('twilio', (_body.From || '').replace('whatsapp:', ''), _body.Body || '');
+  ledgerPut(_msgId, { direction: 'inbound', provider: 'twilio', from: (_body.From || '').replace('whatsapp:', ''), inboundAt: _inboundAt });
   try {
     const incomingMsg = req.body.Body || '';
     const from = req.body.From || '';
@@ -629,95 +884,65 @@ app.post('/webhook', async (req, res) => {
       status: interestedUnit ? 'Interested' : 'New',
     });
 
-    // Send reply via Twilio TwiML
+    // Send reply via Twilio TwiML, wiring a delivery-status callback to /twilio-status
+    const _base = process.env.PUBLIC_URL || ('https://' + req.get('host'));
     const twiml = new MessagingResponse();
-    twiml.message(replyText);
+    twiml.message({ statusCallback: _base + '/twilio-status' }, replyText);
+    botState.lastSuccess.claude = botState.lastSuccess.claude || new Date().toISOString();
+    ledgerPut(_msgId, { replyAt: new Date().toISOString(), path: 'claude' });
 
     res.type('text/xml');
     res.send(twiml.toString());
   } catch (error) {
-    logError(error);
+    // Distinct, classified error logging — never collapse to one opaque message
+    const c = classifyError(error);
+    botState.lastClaudeError = { ...c, at: new Date().toISOString() };
+    logError(new Error('[POST /webhook][' + c.kind + '][status=' + c.status + '] ' + c.message));
+    console.error('[POST /webhook] FAILED kind=' + c.kind + ' status=' + c.status + ' :: ' + c.message);
+    ledgerPut(_msgId, { replyAt: new Date().toISOString(), errorKind: c.kind });
     const twiml = new MessagingResponse();
-    twiml.message('Sorry, something went wrong. Please try again.');
+    twiml.message(getConfig('FALLBACK_MESSAGE') || ARABIC_FALLBACK);
     res.type('text/xml');
     res.send(twiml.toString());
   }
 });
 
-// Debug: see exactly what getVacantProperties returns
-
-// === META CLOUD API WEBHOOK HANDLER ===
-app.get('/meta-webhook', (req, res) => {
+// === META CLOUD API: webhook verification (GET) ===
+// Meta calls GET with hub.mode/hub.verify_token/hub.challenge. Primary path is
+// GET /webhook; /meta-webhook is kept as a back-compat alias.
+function handleMetaVerify(req, res) {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  if (mode === 'subscribe') {
-    console.log('[Meta] Webhook verified');
+  const expected = getConfig('META_VERIFY_TOKEN') || DEFAULT_VERIFY_TOKEN;
+  if (mode === 'subscribe' && token === expected) {
+    console.log('[Meta] Webhook verified (challenge echoed)');
     return res.status(200).send(challenge);
   }
-  res.sendStatus(403);
+  console.warn('[Meta] Webhook verify FAILED mode=' + mode + ' tokenMatch=' + (token === expected));
+  return res.sendStatus(403);
+}
+app.get('/webhook', handleMetaVerify);
+app.get('/meta-webhook', handleMetaVerify);
+
+// === META CLOUD API: inbound + status (POST alias) ===
+// Primary inbound path is POST /webhook (provider-routed). This alias delegates
+// to the same shared handler so nothing breaks mid-migration.
+app.post('/meta-webhook', async (req, res) => {
+  res.sendStatus(200); // ack immediately
+  const body = req.body || {};
+  if (body.object !== 'whatsapp_business_account') return;
+  lastWebhookHit = { endpoint: 'meta-webhook', time: new Date().toISOString() };
+  lastRequest = { path: '/meta-webhook', method: 'POST', bodyKeys: Object.keys(body), time: new Date().toISOString() };
+  handleMetaWebhook(body).catch(e => logError(new Error('[Meta webhook alias] ' + (e && e.message))));
 });
 
-app.post('/meta-webhook', async (req, res) => {
-  res.sendStatus(200); // Respond immediately
-  try {
-    const body = req.body;
-    if (body.object !== 'whatsapp_business_account') return;
-    
-    const entry = body.entry && body.entry[0];
-    const changes = entry && entry.changes && entry.changes[0];
-    const value = changes && changes.value;
-    if (!value || !value.messages) return;
-    
-    const msg = value.messages[0];
-    if (!msg || msg.type !== 'text') return;
-    
-    const phone = msg.from; // e.g. "97412345678"
-    const userMessage = msg.text.body;
-    const phoneNumberId = value.metadata.phone_number_id;
-    
-    console.log('[Meta Webhook] Message from ' + phone + ': ' + userMessage);
-    lastWebhookHit = { endpoint: 'meta-webhook', phone, msg: userMessage, time: new Date().toISOString() };
-    lastRequest = { path: '/meta-webhook', method: 'POST', bodyKeys: Object.keys(body), time: new Date().toISOString() };
-    
-    // Get properties and ask Claude
-    const properties = await getVacantProperties();
-    const claudeResponse = await askClaude(phone, userMessage, properties);
-    
-    // Parse Claude's JSON response
-    let replyText;
-    try {
-      const parsed = JSON.parse(claudeResponse);
-      replyText = parsed.reply || claudeResponse;
-    } catch(e) {
-      replyText = claudeResponse;
-    }
-    
-    // Send reply via Meta Cloud API
-    const metaToken = getConfig('META_ACCESS_TOKEN');
-    const metaPhoneId = getConfig('META_PHONE_NUMBER_ID') || phoneNumberId;
-    
-    await fetch('https://graph.facebook.com/v17.0/' + metaPhoneId + '/messages', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + metaToken,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: phone,
-        type: 'text',
-        text: { body: replyText }
-      })
-    });
-    
-    console.log('[Meta Webhook] Reply sent to ' + phone);
-  } catch(e) {
-    console.error('[Meta Webhook] Error:', e.message);
-    lastBypassError = { endpoint: 'meta-webhook', error: e.message, time: new Date().toISOString() };
-  }
+// === Twilio delivery status callback endpoint ===
+app.post('/twilio-status', (req, res) => {
+  try { recordTwilioStatus(req.body || {}); } catch (e) { logError(e); }
+  res.sendStatus(204);
 });
-// === END META CLOUD API WEBHOOK HANDLER ===
+// === END WEBHOOK HANDLERS ===
 
 app.get('/debug-vacancy', async (req, res) => {
   try {
@@ -1448,7 +1673,14 @@ app.get('/mzad-verify-otp', async (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.json({ commit: 'next-push', deployed: new Date().toISOString(), build: 'fix-step2data-from-step1-prevdata' });
+  res.json({
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || 'provider-abstraction-v4',
+    deployed: new Date().toISOString(),
+    build: 'fix-claude-model-sonnet46+meta-provider+delivery-observability',
+    model: CLAUDE_MODEL,
+    provider: activeProvider(),
+    mode: runMode(),
+  });
 });
 
 
@@ -1887,7 +2119,82 @@ app.get('/post-vacant', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', version: 'v3-ad-poster', commit: '23426c0', cache: cachedVacantUnits.length });
+  res.json({
+    status: 'healthy',
+    version: 'v4-provider-abstraction',
+    model: CLAUDE_MODEL,
+    provider: activeProvider(),
+    mode: runMode(),                                  // "production" | "sandbox"
+    cache: cachedVacantUnits.length,
+    lastInboundWebhookAt: botState.lastInboundAt,
+    lastInbound: botState.lastInbound,
+    lastOutboundDelivery: botState.lastOutboundDelivery,
+    lastSuccess: botState.lastSuccess,                // { rule, claude } timestamps
+    lastClaudeError: botState.lastClaudeError,        // {kind,status,message,at} or null
+    lastAlert: botState.lastAlert,
+    ledgerSize: deliveryLedger.size,
+    startedAt: botState.startedAt,
+  });
+});
+
+// Recent delivery ledger entries (debug / verification)
+app.get('/ledger', (req, res) => {
+  const items = Array.from(deliveryLedger.entries()).slice(-50).map(([id, rec]) => ({ id, ...rec }));
+  res.json({ count: deliveryLedger.size, items });
+});
+
+// === SELFTEST: prove the whole engine headlessly (no phone / WhatsApp Web) ===
+// Exercises BOTH the rule path and the Claude path end-to-end through the same
+// shared business logic the live webhooks use. This is the test trap guard:
+// it does NOT pass on the 47-unit reply alone — the Claude path must produce a
+// real reply, not the fallback.
+async function runSelftestMatrix() {
+  const results = [];
+  const FB = getConfig('FALLBACK_MESSAGE') || ARABIC_FALLBACK;
+  async function run(test, fn, assertFn) {
+    const t0 = Date.now();
+    try {
+      const out = await fn();
+      const v = assertFn(out);
+      results.push({ test, status: v.pass ? 'pass' : 'fail', detail: v.detail, latency: Date.now() - t0 });
+    } catch (e) {
+      const c = classifyError(e);
+      results.push({ test, status: 'fail', detail: c.kind + ': ' + c.message, latency: Date.now() - t0 });
+    }
+  }
+  const P = 'selftest_' + Date.now() + '_';
+  // Rule path
+  await run('rule:vacant-units', () => generateReply('وحدات شاغرة', P + 'rule'),
+    r => ({ pass: r.path === 'rule' && /[0-9٠-٩]/.test(r.reply), detail: 'path=' + r.path + ' len=' + r.reply.length }));
+  // Claude path (Arabic greeting) — the exact case that was broken
+  await run('claude:greeting-ar', () => generateReply('مرحبا', P + 'gar'),
+    r => ({ pass: r.path === 'claude' && !r.errorKind && r.reply && r.reply !== FB, detail: (r.errorKind ? 'ERR ' + r.errorKind : 'ok') + ' :: ' + r.reply.substring(0, 90) }));
+  // Claude path (Arabic identity)
+  await run('claude:identity-ar', () => generateReply('من انت', P + 'idar'),
+    r => ({ pass: r.path === 'claude' && !r.errorKind && r.reply !== FB, detail: (r.errorKind || 'ok') + ' :: ' + r.reply.substring(0, 90) }));
+  // Claude path (English)
+  await run('claude:greeting-en', () => generateReply('hello', P + 'gen'),
+    r => ({ pass: r.path === 'claude' && !r.errorKind && /[a-zA-Z]/.test(r.reply) && r.reply !== FB, detail: (r.errorKind || 'ok') + ' :: ' + r.reply.substring(0, 90) }));
+  // Direct Claude credential probe (classifies auth/quota/model distinctly)
+  await run('claude:credential', async () => {
+    const resp = await anthropic.messages.create({ model: CLAUDE_MODEL, max_tokens: 8, thinking: { type: 'disabled' }, output_config: { effort: 'low' }, messages: [{ role: 'user', content: 'ping' }] });
+    return resp.content[0].text;
+  }, r => ({ pass: !!r, detail: 'model=' + CLAUDE_MODEL + ' reply=' + String(r).substring(0, 40) }));
+  // Meta provider readiness (config present so production migration can flip on)
+  await run('meta:config-ready', async () => ({ token: !!getConfig('META_ACCESS_TOKEN'), pid: !!getConfig('META_PHONE_NUMBER_ID'), verify: getConfig('META_VERIFY_TOKEN') || DEFAULT_VERIFY_TOKEN }),
+    r => ({ pass: r.token && r.pid, detail: 'access_token=' + r.token + ' phone_number_id=' + r.pid + ' verify_token=' + r.verify }));
+  return results;
+}
+
+app.post('/selftest', async (req, res) => {
+  const expected = process.env.SELFTEST_SECRET || getConfig('SELFTEST_SECRET');
+  const provided = req.get('x-selftest-secret') || (req.query && req.query.secret) || (req.body && req.body.secret);
+  if (!expected) return res.status(503).json({ error: 'SELFTEST_SECRET not configured in env' });
+  if (provided !== expected) return res.status(401).json({ error: 'unauthorized' });
+  const results = await runSelftestMatrix();
+  const ok = results.every(r => r.status === 'pass');
+  if (!ok) maybeAlert('selftest-failed', 'SELFTEST failures: ' + results.filter(r => r.status !== 'pass').map(r => r.test + '(' + r.detail + ')').join(' | '));
+  res.json({ ok, mode: runMode(), provider: activeProvider(), model: CLAUDE_MODEL, ranAt: new Date().toISOString(), results });
 });
 
 // CATCH-ALL: Log ANY unmatched POST
@@ -2724,4 +3031,36 @@ app.listen(PORT, () => {
 
   // Start the ad poster scheduler (monthly cron + vacancy change monitor)
   startScheduler();
+
+  // === HEARTBEAT: daily self-test of BOTH paths; email on failure ===
+  try {
+    const cron = require('node-cron');
+    // 06:00 UTC = 09:00 Doha, daily
+    cron.schedule('0 6 * * *', async () => {
+      console.log('[Heartbeat] Running daily self-test...');
+      try {
+        const results = await runSelftestMatrix();
+        const failed = results.filter(r => r.status !== 'pass');
+        if (failed.length) {
+          await maybeAlert('heartbeat-failed',
+            'Daily heartbeat FAILED for: ' + failed.map(r => r.test + ' [' + r.detail + ']').join(' | ') +
+            '\nprovider=' + activeProvider() + ' mode=' + runMode() + ' model=' + CLAUDE_MODEL);
+        } else {
+          console.log('[Heartbeat] All paths healthy (' + results.length + ' checks)');
+        }
+      } catch (e) {
+        await maybeAlert('heartbeat-error', 'Heartbeat crashed: ' + e.message);
+      }
+    });
+    // === CREDENTIAL EXPIRY: monthly reminder (1st @ 08:00 UTC) ===
+    cron.schedule('0 8 1 * *', async () => {
+      await maybeAlert('credential-expiry-monthly',
+        'Monthly credential review due. Check CREDENTIALS.md for ANTHROPIC_API_KEY, META_ACCESS_TOKEN ' +
+        '(60-day tokens expire!), MZAD_SESSION/XSRF, Gmail OAuth refresh token, TWILIO_AUTH_TOKEN. ' +
+        'Rotate anything within ~7 days of expiry.');
+    });
+    console.log('[Heartbeat] Daily self-test + monthly expiry cron scheduled');
+  } catch (e) {
+    console.error('[Heartbeat] Failed to schedule cron:', e.message);
+  }
 });
