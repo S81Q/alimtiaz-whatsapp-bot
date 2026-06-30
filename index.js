@@ -85,27 +85,22 @@ async function getGoogleSheets() {
   return sheetsClient;
 }
 
-// --- Vacancy Sync via Gmail Rent Report PDF ---
+// --- Vacancy refresh: SOURCE OF TRUTH is the manual Properties sheet (status === متاح) ---
+// The Gmail rent-report auto-detector is intentionally NOT used as the source of truth:
+// its heuristic over-listed every unit and ignored مؤجر markings. It must never override
+// the human Available column. (getVacantUnitsFromGmail is kept only for optional, manual,
+// human-reviewed proposals — it is no longer wired into the live vacancy answer.)
 async function syncVacancy() {
-  console.log('[VacancySync] Starting sync via Gmail rent report...');
+  console.log('[VacancySync] Refreshing cache from Properties sheet (متاح only)...');
   try {
-    const vacantUnits = await getVacantUnitsFromGmail();
-    if (vacantUnits && vacantUnits.length > 0) {
-      await writeVacancyToSheet(vacantUnits);
-  cachedVacantUnits = vacantUnits; // Cache in memory for instant access
-  // Build persistent vacancy prompt
-  if (vacantUnits.length > 0) {
-    let pLines = vacantUnits.map((u, i) => (i+1) + '. ' + (u.unit||'?') + (u.property ? ' - ' + u.property : '') + (u.monthlyRent ? ' (' + u.monthlyRent + ' QAR)' : ''));
-    persistentVacancyPrompt = '\n\n=== CONFIRMED VACANT UNITS (' + vacantUnits.length + ') ===\n' + pLines.join('\n') + '\n=== YOU MUST LIST THESE WHEN ASKED ===';
-    console.log('[VacancySync] Built persistent prompt with ' + vacantUnits.length + ' units');
-  }
-  console.log('[VacancySync] Cached', vacantUnits.length, 'vacant units in memory');
-      console.log('[VacancySync] Done: ' + vacantUnits.length + ' vacant units from Gmail');
-      return { vacant: vacantUnits.length, total: vacantUnits.length, source: 'gmail' };
-    }
+    const units = await getVacantProperties();
+    cachedVacantUnits = units;            // mirror the متاح-only truth for fast fallback
+    persistentVacancyPrompt = '';         // never force-feed a unit list to Claude
+    console.log('[VacancySync] Cached ' + units.length + ' متاح units from Properties sheet');
+    return { vacant: units.length, total: units.length, source: 'properties-sheet' };
   } catch (e) {
-    console.error('[VacancySync] Gmail method failed, falling back to sheet:', e.message);
-    return await syncVacancyFromSheet();
+    console.error('[VacancySync] Properties read failed:', e.message);
+    return { vacant: cachedVacantUnits.length, total: cachedVacantUnits.length, source: 'cache', error: e.message };
   }
 }
 
@@ -272,72 +267,52 @@ async function syncVacancyFromSheet() {
   return { vacant: vacantCount, total: vacancyData.length - 1, source: 'sheet' };
 }
 // --- Property Retrieval (filtered by vacancy) ---
+// Owner/landlord columns that must NEVER reach a customer or Claude.
+const OWNER_COL_RE = /owner|landlord|proprietor|مالك|المالك|الملاك|ملاك|صاحب|اسم.?المالك/i;
+function _norm(v) { return (v == null ? '' : String(v)).trim(); }
+// "Available" ground truth = exactly متاح (or feminine متاحة), trimmed. Nothing else.
+function isAvailableStatus(v) { const s = _norm(v); return s === 'متاح' || s === 'متاحة'; }
+function isRentedStatus(v) { const s = _norm(v); return s.indexOf('مؤجر') === 0; }
+
+// SOURCE OF TRUTH for vacancy = the manual Properties sheet's status column === متاح.
+// Owner/landlord columns are stripped before returning. The Gmail auto-detector is
+// NOT consulted here and never overrides a مؤجر marking.
 async function getVacantProperties() {
-  // sheetsClient reused for performance
   const sheets = await getGoogleSheets();
+  const resp = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Properties!A1:Z1000' });
+  const rows = resp.data.values || [];
+  if (rows.length < 2) return [];
 
-  const [propsResponse, vacancyResponse] = await Promise.all([
-    sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Properties!A1:Z1000',
-    }),
-    sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Vacancy!A1:E1000',
-    }).catch(() => ({ data: { values: [] } })),
-  ]);
+  const headers = (rows[0] || []).map(h => _norm(h));
+  const dataRows = rows.slice(1).filter(r => r && r.some(c => _norm(c) !== ''));
 
-  const propRows = propsResponse.data.values || [];
-  const vacancyRows = vacancyResponse.data.values || [];
-  if (propRows.length < 2) return [];
+  // Auto-detect the status column = the column carrying the most متاح/مؤجر values
+  // (robust to whatever the header is named).
+  let statusIdx = -1, best = 0;
+  for (let c = 0; c < headers.length; c++) {
+    let cnt = 0;
+    for (const r of dataRows) { if (isAvailableStatus(r[c]) || isRentedStatus(r[c])) cnt++; }
+    if (cnt > best) { best = cnt; statusIdx = c; }
+  }
 
-  const vacHeaders = vacancyRows[0] || [];
-  const vacUnitIdx = vacHeaders.indexOf('Unit');
-  const vacStatusIdx = vacHeaders.indexOf('Status');
-  const vacNameIdx = vacHeaders.indexOf('Property_Name');
-  const vacancyMap = {};
-  vacancyRows.slice(1).forEach(row => {
-    const unit = row[vacUnitIdx];
-    const status = row[vacStatusIdx];
-    const propertyName = vacNameIdx >= 0 ? (row[vacNameIdx] || '') : '';
-    if (unit) vacancyMap[unit] = { status, propertyName };
-  });
+  const unitIdx = headers.findIndex(h => /^unit$|^الوحدة$|^رقم/i.test(h));
+  const ownerIdxs = headers.map((h, i) => OWNER_COL_RE.test(h) ? i : -1).filter(i => i >= 0);
 
-  // Build a map of Properties by Unit ID for enrichment
-  const propHeaders = propRows[0];
-  const propByUnit = {};
-  propRows.slice(1).forEach(row => {
+  const out = [];
+  if (statusIdx < 0) return out; // no recognizable status column → list nothing
+  for (const r of dataRows) {
+    if (!isAvailableStatus(r[statusIdx])) continue; // ONLY متاح
     const obj = {};
-    propHeaders.forEach((h, i) => { obj[h] = row[i] || ''; });
-    if (obj.Unit) propByUnit[obj.Unit] = obj;
-  });
-
-  // Return ALL units from Vacancy sheet that are marked Vacant,
-  // enriched with Properties data where unit IDs match
-  return vacancyRows.slice(1)
-    .filter(row => {
-      const status = row[vacStatusIdx] || '';
-      return status === 'Vacant' || status === 'Available';
-    })
-    .map(row => {
-      const unit = row[vacUnitIdx] || '';
-      const propertyName = vacNameIdx >= 0 ? (row[vacNameIdx] || '') : '';
-      // Try to enrich with Properties data
-      const propData = propByUnit[unit] || {};
-      return {
-        Unit: unit,
-        Status: 'Vacant',
-        Property_Name: propertyName || propData.Property_Name || '',
-        Location: propData.Location || '',
-        Type: propData.Type || '',
-        Rent_QAR: propData.Rent_QAR || '',
-        Size_sqm: propData.Size_sqm || '',
-        Bedrooms: propData.Bedrooms || '',
-        Bathrooms: propData.Bathrooms || '',
-        Notes: propData.Notes || '',
-        Maps_Link: propData.Maps_Link || ''
-      };
+    headers.forEach((h, i) => {
+      if (!h || i === statusIdx) return;
+      if (ownerIdxs.includes(i)) return;            // STRIP owner/landlord columns
+      obj[h] = _norm(r[i]);
     });
+    obj.Unit = (unitIdx >= 0 ? _norm(r[unitIdx]) : '') || obj.Unit || '';
+    obj.Status = 'Vacant';
+    out.push(obj);
+  }
+  return out;
 }
 
 async function logLead({ phone, name, language, question, interestedUnit, status }) {
@@ -431,7 +406,8 @@ function isVacancyQuery(text) {
   const t = (text || '').toLowerCase();
   return VAC_KEYWORDS.some(k => t.includes(k));
 }
-const HARDCODED_VACANCY = 'الوحدات الشاغرة حالياً:\n\n1. P6A - مخزن بركة العوامر (20,000 ريال)\n2. P10 - محل ام غويلينا (9,000 ريال)\n3. P15 - مصنع العفجة\n4. P26-1 - سكن عمال غرفة (1,000 ريال)\n5. P26-3 - سكن عمال غرفتين (2,000 ريال)\n6. P26-4 - سكن عمال 3 غرف (3,000 ريال)\n7. P33-4 - سكن عمال 18 غرفة (16,200 ريال)\n8. P34 - مصنع الجبس (100,000 ريال)\n9. P47 - ملحق سكنى السد (3,200 ريال)\n10. P48 - بناء السد\n11. P49 - غرفه السد (1,100 ريال)\n\nللاستفسار:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
+// Shown when zero units are marked متاح — reflect reality, never a hardcoded list.
+const NO_VACANCY_REPLY = 'لا توجد وحدات متاحة للإيجار في الوقت الحالي. 🙏\n\nيسعدنا تسجيل طلبك والتواصل معك فور توفر وحدة مناسبة.\n\nللاستفسار:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
 function buildVacancyReply(units) {
   const lines = units.map((u, i) => {
     const id = (u && (u.unit || u.Unit)) || '?';
@@ -447,10 +423,11 @@ function buildVacancyReply(units) {
 async function generateReply(incomingMsg, phone) {
   // Rule path: vacancy keyword → list of vacant units (no Claude needed)
   if (isVacancyQuery(incomingMsg)) {
-    let units = (cachedVacantUnits && cachedVacantUnits.length > 0) ? cachedVacantUnits : [];
-    if (units.length === 0) { try { units = await getVacantProperties(); } catch (e) {} }
+    // Source of truth = Properties sheet (متاح only). Cache is only an error fallback.
+    let units = [];
+    try { units = await getVacantProperties(); } catch (e) { units = cachedVacantUnits || []; }
     botState.lastSuccess.rule = new Date().toISOString();
-    return { reply: units.length > 0 ? buildVacancyReply(units) : HARDCODED_VACANCY, path: 'rule' };
+    return { reply: units.length > 0 ? buildVacancyReply(units) : NO_VACANCY_REPLY, path: 'rule' };
   }
   // Claude path: conversational
   try {
@@ -603,7 +580,11 @@ const SYSTEM_PROMPT = `You are a bilingual real estate agent for Al-Imtiaz Wal-J
   👤 نزار: 77851855 Nizar
   👤 أحمد: 55513389 Ahmed
   WhatsApp: +974 7029 7066
-- CRITICAL: If Available Properties list has ANY items, they ARE vacant. List them by Unit and Property_Name even if Rent/Size fields are empty. NEVER say no units available if the list is not empty.
+- AVAILABILITY = TRUTH: The "Available Properties" list contains ONLY units explicitly marked متاح in the sheet. List exactly those units. If the list is EMPTY, tell the customer there are no available units right now and offer to take their details — do NOT invent, guess, or list rented units.
+- PRIVACY (hard rule): NEVER reveal or imply the property owner/landlord identity, owner name, owner phone, ownership details, or any internal financials (purchase price, owner's rent share, mortgages). If asked who owns a property or for the owner's contact, politely decline and offer the staff agents below instead. Only ever share these staff contacts:
+  👤 محمد زيدان: 31293905 Mohammed
+  👤 نزار: 77851855 Nizar
+  👤 أحمد: 55513389 Ahmed
 - Always respond as JSON: {"reply":"...","interested_unit":"...","collected_name":"..."}`;
 
 // Simple in-memory conversation store (keyed by phone number)
@@ -615,17 +596,14 @@ let lastClaudeData = null;
 
 // In-memory cache of vacant units (populated by syncVacancy)
 let cachedVacantUnits = [];
-// Quick startup: read vacancy from Sheet immediately (Gmail sync runs later)
+// Quick startup: load متاح-only truth from the Properties sheet (no force-feed prompt)
 (async () => {
   try {
     const quickUnits = await getVacantProperties();
-    if (quickUnits && quickUnits.length > 0 && cachedVacantUnits.length === 0) {
-      cachedVacantUnits = quickUnits;
-      let pLines = quickUnits.map((u, i) => (i+1) + '. ' + (u.Unit || u.unit || '?') + (u.Property_Name || u.property ? ' - ' + (u.Property_Name || u.property) : '') + (u.Rent_QAR || u.monthlyRent ? ' (' + (u.Rent_QAR || u.monthlyRent) + ' QAR)' : ''));
-      persistentVacancyPrompt = '\n\n=== CONFIRMED VACANT UNITS (' + quickUnits.length + ') ===\n' + pLines.join('\n') + '\n=== YOU MUST LIST THESE WHEN ASKED ===';
-      console.log('[QuickStart] Loaded ' + quickUnits.length + ' units from Sheet at startup');
-    }
-  } catch(e) { console.log('[QuickStart] Sheet read failed, will retry via Gmail sync:', e.message); }
+    cachedVacantUnits = quickUnits;
+    persistentVacancyPrompt = '';
+    console.log('[QuickStart] Loaded ' + quickUnits.length + ' متاح units from Properties sheet');
+  } catch(e) { console.log('[QuickStart] Sheet read failed:', e.message); }
 })();
 let persistentVacancyPrompt = ''; // Always included in Claude's system prompt
 
@@ -825,13 +803,12 @@ app.post('/webhook', async (req, res) => {
     const vacKw2 = ['فاضية', 'فاضيه', 'شاغرة', 'شاغره', 'متاحة', 'متاحه', 'vacant', 'available', 'empty', 'فاضي', 'شاغر'];
     const isVacQ2 = vacKw2.some(k => incomingMsg.toLowerCase().includes(k));
     if (isVacQ2) {
-      let units2 = cachedVacantUnits.length > 0 ? cachedVacantUnits : properties;
-      if (units2.length === 0) { try { units2 = await getVacantProperties(); } catch(e) {} }
+      let units2 = properties; // properties = getVacantProperties() truth (متاح only)
       if (units2.length === 0) {
-        console.log('[BYPASS] ALL fallbacks empty, using HARDCODED list');
+        console.log('[BYPASS] zero متاح units → no-vacancy reply (no hardcoded list)');
         const hcReply = 'الوحدات الشاغرة حالياً:\n\n1. P6A - مخزن بركة العوامر (20,000 ريال)\n2. P10 - محل ام غويلينا (9,000 ريال)\n3. P15 - مصنع العفجة\n4. P26-1 - سكن عمال غرفة (1,000 ريال)\n5. P26-3 - سكن عمال غرفتين (2,000 ريال)\n6. P26-4 - سكن عمال 3 غرف (3,000 ريال)\n7. P33-4 - سكن عمال 18 غرفة (16,200 ريال)\n8. P34 - مصنع الجبس (100,000 ريال)\n9. P47 - ملحق سكنى السد (3,200 ريال)\n10. P48 - بناء السد\n11. P49 - غرفه السد (1,100 ريال)\n\nللاستفسار:\n👤 محمد زيدان: 31293905\n👤 نزار: 77851855\n👤 أحمد: 55513389';
         const twimlHC = new MessagingResponse();
-        twimlHC.message(hcReply);
+        twimlHC.message(NO_VACANCY_REPLY);
         res.type('text/xml');
         return res.send(twimlHC.toString());
       }
@@ -964,6 +941,47 @@ app.get('/debug-vacancy', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack?.substring(0,300) });
+  }
+});
+
+// Ground-truth diagnostic for the Properties sheet status column (متاح/مؤجر tally).
+app.get('/debug-properties', async (req, res) => {
+  try {
+    const sheets = await getGoogleSheets();
+    const resp = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Properties!A1:Z1000' });
+    const rows = resp.data.values || [];
+    const headers = (rows[0] || []).map(h => _norm(h));
+    const dataRows = rows.slice(1).filter(r => r && r.some(c => _norm(c) !== ''));
+    let statusIdx = -1, best = 0;
+    for (let c = 0; c < headers.length; c++) {
+      let cnt = 0;
+      for (const r of dataRows) { if (isAvailableStatus(r[c]) || isRentedStatus(r[c])) cnt++; }
+      if (cnt > best) { best = cnt; statusIdx = c; }
+    }
+    const tally = { mutah_متاح: 0, muajjar_مؤجر: 0, blank: 0, other: {} };
+    if (statusIdx >= 0) {
+      for (const r of dataRows) {
+        const v = _norm(r[statusIdx]);
+        if (isAvailableStatus(v)) tally.mutah_متاح++;
+        else if (isRentedStatus(v)) tally.muajjar_مؤجر++;
+        else if (v === '') tally.blank++;
+        else tally.other[v] = (tally.other[v] || 0) + 1;
+      }
+    }
+    const ownerCols = headers.filter(h => OWNER_COL_RE.test(h));
+    const vacant = await getVacantProperties();
+    res.json({
+      headers,
+      totalDataRows: dataRows.length,
+      statusColumn: statusIdx >= 0 ? { index: statusIdx, header: headers[statusIdx] } : null,
+      tally,
+      ownerColumnsStripped: ownerCols,
+      vacantCount_after_fix: vacant.length,
+      vacantUnits: vacant.map(u => u.Unit),
+      sampleVacant_ownerStripped: vacant[0] || null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: (e.stack || '').substring(0, 300) });
   }
 });
 
@@ -1676,7 +1694,7 @@ app.get('/version', (req, res) => {
   res.json({
     commit: process.env.RAILWAY_GIT_COMMIT_SHA || 'provider-abstraction-v4',
     deployed: new Date().toISOString(),
-    build: 'fix-claude-model-sonnet46+meta-provider+delivery-observability',
+    build: 'vacancy-truth-properties-متاح+owner-privacy+no-forcefeed',
     model: CLAUDE_MODEL,
     provider: activeProvider(),
     mode: runMode(),
