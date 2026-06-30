@@ -969,8 +969,16 @@ app.get('/debug-properties', async (req, res) => {
       }
     }
     const ownerCols = headers.filter(h => OWNER_COL_RE.test(h));
+    // Distinct trimmed values per column (small sheet) to reveal the real status vocabulary
+    const distinctByHeader = {};
+    headers.forEach((h, i) => {
+      const counts = {};
+      for (const r of dataRows) { const v = _norm(r[i]); counts[v] = (counts[v] || 0) + 1; }
+      distinctByHeader[h || ('col' + i)] = counts;
+    });
     const vacant = await getVacantProperties();
     res.json({
+      distinctByHeader,
       headers,
       totalDataRows: dataRows.length,
       statusColumn: statusIdx >= 0 ? { index: statusIdx, header: headers[statusIdx] } : null,
